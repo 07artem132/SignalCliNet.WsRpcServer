@@ -27,4 +27,15 @@
       </None>
     </ItemGroup>
 
+    <!-- SignalCli.Runtime.targets копіює signal-cli лише у build-output ($(TargetDir)),
+         тому dotnet publish його не переносить. Доносимо payload у publish-папку власноруч. -->
+    <Target Name="CopySignalCliToPublish" AfterTargets="Publish">
+      <ItemGroup>
+        <_SignalCliPublishFiles Include="$(TargetDir)signal-cli/**/*" />
+      </ItemGroup>
+      <Copy SourceFiles="@(_SignalCliPublishFiles)"
+            DestinationFiles="@(_SignalCliPublishFiles->'$(PublishDir)signal-cli/%(RecursiveDir)%(Filename)%(Extension)')"
+            SkipUnchangedFiles="true" />
+    </Target>
+
 </Project>
