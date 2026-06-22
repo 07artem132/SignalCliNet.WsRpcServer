@@ -79,7 +79,7 @@ public class SubscriptionManager(
                     timeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
 
                     var response = await _signalEventService.SubscribeAsync(account, timeoutCts.Token);
-                    signalSubscriptionId = response.id;
+                    signalSubscriptionId = response.Id;
 
                     Logger.LogInformation(
                         "Created Signal subscription {SignalSubscriptionId} for account {Account}",

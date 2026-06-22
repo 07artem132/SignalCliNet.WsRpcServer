@@ -1,0 +1,33 @@
+# Package-based build: restores dependencies from GitHub Packages.
+# Export GITHUB_USERNAME and GITHUB_TOKEN (PAT with read:packages) first, then
+# run from SignalCliNet.WsRpcServer/deploy:  docker compose up -d --build
+#
+# For the offline / from-source build instead, point dockerfile at
+# Dockerfile.from-source and set context to the parent of the three repos.
+services:
+  wsrpcserver:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        GITHUB_USERNAME: "${GITHUB_USERNAME}"
+        GITHUB_TOKEN: "${GITHUB_TOKEN}"
+    image: wsrpcserver:latest
+    container_name: wsrpcserver
+    restart: unless-stopped
+    ports:
+      # Host:Container. Bind to 127.0.0.1 and terminate TLS in a reverse proxy
+      # (see nginx-wss.conf.example) rather than exposing 9000 to the internet raw.
+      - "127.0.0.1:9000:9000"
+    environment:
+      Server__Host: "0.0.0.0"
+      Server__Port: "9000"
+      SignalCli__StoragePathCli: "/data/SignalCliStorageData"
+      Logging__LogLevel__Default: "Information"
+    volumes:
+      # Linked-account keys + signal-cli state. Keep this volume safe — it IS the
+      # linked device. Losing it means re-linking from the phone.
+      - signalcli-data:/data
+
+volumes:
+  signalcli-data:

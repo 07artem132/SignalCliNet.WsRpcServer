@@ -72,9 +72,13 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
         formatter.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
 
         // Configure serialization context for better performance and AOT support
+        // Source-gen context provides fast-path metadata for the registered Signal types;
+        // the reflection-based fallback resolves any other SignalCli payload type (e.g.
+        // types carrying their own custom [JsonConverter], like ListAccountsResponse, whose
+        // internal converter the source generator cannot reference).
         formatter.JsonSerializerOptions.TypeInfoResolver = JsonTypeInfoResolver.Combine(
-            // Add generated JsonSerializerContext classes here
-            SignalCliSerializerContext.Default
+            SignalCliSerializerContext.Default,
+            new DefaultJsonTypeInfoResolver()
         );
 
         Logger.LogDebug("Configured JSON formatter for session {Id}", Id);
