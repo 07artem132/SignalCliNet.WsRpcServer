@@ -2,6 +2,7 @@
 using SignalCli.Models.Signal.Accounts;
 using SignalCli.Models.Signal.Devices;
 using SignalCli.Models.Signal.Events;
+using SignalCli.Models.Signal.Message;
 using SignalCliNet.WsRpcServer.Model;
 using WsRpcServer;
 using WsRpcServer.Events;
@@ -21,6 +22,7 @@ namespace SignalCliNet.WsRpcServer.Serialization;
 [JsonSerializable(typeof(SyncAccountsResponse))]
 [JsonSerializable(typeof(StartLinkResponse))]
 [JsonSerializable(typeof(FinishLinkResponse))]
+[JsonSerializable(typeof(SendMessageResponse))]
 [JsonSerializable(typeof(TextMessageEventArgs))]
 [JsonSerializable(typeof(ReactionEventArgs))]
 [JsonSerializable(typeof(AttachmentEventArgs))]

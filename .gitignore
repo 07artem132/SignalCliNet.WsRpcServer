@@ -1,0 +1,20 @@
+# Build output
+bin/
+obj/
+
+# signal-cli runtime payload staged into output by SignalCli.Runtime.targets
+**/signal-cli/
+
+# Local signal-cli account / key storage
+SignalCliStorageData/
+
+# Local NuGet build feed
+.localfeed/
+
+# IDE
+.vs/
+.idea/
+*.user
+
+# OS
+.DS_Store

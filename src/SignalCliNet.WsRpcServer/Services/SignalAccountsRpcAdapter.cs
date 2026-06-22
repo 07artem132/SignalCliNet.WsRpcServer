@@ -21,7 +21,7 @@ public class SignalAccountsRpcAdapter(ISignalAccounts signalAccounts, ILogger<Si
         _logger.LogInformation("RPC: Request to list accounts");
         try
         {
-            return await _signalAccounts.ListAccounts(cancellationToken);
+            return await _signalAccounts.ListAccountsAsync(cancellationToken);
         }
         catch (Exception ex)
         {
@@ -35,7 +35,7 @@ public class SignalAccountsRpcAdapter(ISignalAccounts signalAccounts, ILogger<Si
         _logger.LogInformation("RPC: Request to sync accounts");
         try
         {
-            return await _signalAccounts.SyncAccount(cancellationToken);
+            return await _signalAccounts.SyncAccountAsync(cancellationToken);
         }
         catch (Exception ex)
         {

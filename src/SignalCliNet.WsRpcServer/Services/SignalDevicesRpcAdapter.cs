@@ -21,7 +21,7 @@ public class SignalDevicesRpcAdapter(ISignalDevices signalDevices, ILogger<Signa
         _logger.LogInformation("RPC: Request to start device linking");
         try
         {
-            return await _signalDevices.StartLink(cancellationToken);
+            return await _signalDevices.StartLinkAsync(cancellationToken);
         }
         catch (Exception ex)
         {
@@ -36,7 +36,7 @@ public class SignalDevicesRpcAdapter(ISignalDevices signalDevices, ILogger<Signa
         _logger.LogInformation("RPC: Request to finish device linking");
         try
         {
-            return await _signalDevices.FinishLink(deviceLinkUri, deviceName, cancellationToken);
+            return await _signalDevices.FinishLinkAsync(deviceLinkUri, deviceName, cancellationToken);
         }
         catch (Exception ex)
         {
