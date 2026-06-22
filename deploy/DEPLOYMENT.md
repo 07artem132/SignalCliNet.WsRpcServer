@@ -33,11 +33,19 @@ Signal, відкрити доступ з інтернету через `wss://` 
 
 ## 2. Збірка та запуск (Docker, рекомендовано)
 
-Залежності (`JSON-RPC.NET`, `SignalCli.NET`, `SignalCli.Runtime`) збираються з
-вихідного коду в локальний NuGet-feed — публічний GitHub-feed не потрібен.
+Залежності (`SignalCli.NET`, `JSON-RPC.NET`, `SignalCli.Runtime`) ставляться як
+**NuGet-пакети з GitHub Packages** (`nuget.pkg.github.com/07artem132`). Feed
+приватний — потрібен GitHub-токен зі скоупом `read:packages`.
+
+> 📦 **Передумова:** пакети потрібних версій (`SignalCli.NET 4.10.0`,
+> `JSON-RPC.NET 1.1.0`, `SignalCli.Runtime 0.14.3.1`) мають бути опубліковані у
+> feed. Публікація — workflow `publish-nuget.yml` у кожному репо
+> (`Actions → Publish NuGet → Run workflow`, або автоматично при релізі).
 
 ```bash
 cd SignalCliNet.WsRpcServer/deploy
+export GITHUB_USERNAME=<ваш-github-логін>
+export GITHUB_TOKEN=<PAT-зі-скоупом-read:packages>
 docker compose up -d --build
 docker compose logs -f          # очікуйте "WebSocket server started on 0.0.0.0:9000"
 ```
@@ -45,13 +53,18 @@ docker compose logs -f          # очікуйте "WebSocket server started on 
 Контейнер слухає `127.0.0.1:9000` і зберігає стан акаунта у volume
 `signalcli-data` (це і є привʼязаний пристрій — бекапте його).
 
-### Альтернатива без Docker
+### Альтернатива: збірка залежностей із вихідного коду (без feed/токена)
+
+Якщо feed недоступний, залежності збираються з сусідніх репо у локальний
+feed. Потрібні `JSON-RPC.NET` та `SignalCli.NET`, виложені поруч (§1).
 
 ```bash
-# 1. зібрати локальний feed із сусідніх репо
-SignalCliNet.WsRpcServer/deploy/build-local-feed.sh /tmp/feed
+# Docker-варіант (context — батьківська тека з трьома репо):
+docker build -f SignalCliNet.WsRpcServer/deploy/Dockerfile.from-source \
+  -t wsrpcserver ..
 
-# 2. опублікувати сервер проти цього feed
+# або без Docker:
+SignalCliNet.WsRpcServer/deploy/build-local-feed.sh /tmp/feed
 cat > /tmp/nuget.config <<'EOF'
 <configuration>
   <packageSources>
@@ -70,7 +83,7 @@ EOF
 dotnet publish SignalCliNet.WsRpcServer/src/SignalCliNet.WsRpcServer/SignalCliNet.WsRpcServer.csproj \
   -c Release -o /opt/wsrpc --configfile /tmp/nuget.config -p:NuGetAudit=false
 
-# 3. запустити (JDK 25 у PATH)
+# запуск (JDK 25 у PATH)
 cd /opt/wsrpc
 SignalCli__JavaExecutable=/opt/jdk25/bin/java dotnet SignalCliNet.WsRpcServer.dll
 ```

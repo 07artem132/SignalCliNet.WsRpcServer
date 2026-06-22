@@ -1,53 +1,51 @@
 # syntax=docker/dockerfile:1
 #
-# Package-based build for SignalCliNet.WsRpcServer.
+# Multi-stage build for SignalCliNet.WsRpcServer.
 #
-# Dependencies (SignalCli.NET, JSON-RPC.NET, SignalCli.Runtime) are restored as
-# NuGet packages from GitHub Packages (nuget.pkg.github.com/07artem132) — no
-# sibling source checkouts needed. Build context is THIS repo only.
+# Build context MUST be the parent directory that contains all three repos as
+# siblings (so the SDK stage can build the dependency NuGet feed from source):
 #
-# The feed requires authentication, so pass a GitHub username + a token with
-# read:packages scope:
+#   <parent>/
+#     JSON-RPC.NET/
+#     SignalCli.NET/
+#     SignalCliNet.WsRpcServer/
 #
-#   docker build -f deploy/Dockerfile \
-#       --build-arg GITHUB_USERNAME=<user> \
-#       --build-arg GITHUB_TOKEN=<PAT-with-read:packages> \
-#       -t wsrpcserver .
+# Build from that parent directory:
+#   docker build -f SignalCliNet.WsRpcServer/deploy/Dockerfile -t wsrpcserver .
 #
-# (docker-compose.yml passes these from the GITHUB_USERNAME / GITHUB_TOKEN env.)
-#
-# Offline / no-token alternative that builds the dependencies from sibling
-# source checkouts: see Dockerfile.from-source.
+# (docker-compose.yml already sets `context: ..` and this Dockerfile path.)
 
 # ----------------------------------------------------------------------------
-# Stage 1 — restore packages from GitHub Packages + publish the server
+# Stage 1 — build dependency feed + publish the server
 # ----------------------------------------------------------------------------
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 
-ARG GITHUB_USERNAME
-ARG GITHUB_TOKEN
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        bash curl ca-certificates tar \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-COPY . .
+COPY JSON-RPC.NET/ ./JSON-RPC.NET/
+COPY SignalCli.NET/ ./SignalCli.NET/
+COPY SignalCliNet.WsRpcServer/ ./SignalCliNet.WsRpcServer/
 
-# Build-time NuGet config: authenticate the GitHub Packages feed declared in the
-# repo's NuGet.Config, fall back to nuget.org for transitive dependencies.
-RUN cat > /tmp/nuget.config <<EOF
+# Build the local NuGet feed (JSON-RPC.NET + SignalCli.NET core + SignalCli.Runtime).
+ENV JSONRPC_REPO=/src/JSON-RPC.NET
+ENV SIGNALCLI_REPO=/src/SignalCli.NET
+RUN bash SignalCliNet.WsRpcServer/deploy/build-local-feed.sh /feed
+
+# A build-time NuGet config that resolves the three packages from the local feed
+# and everything else from nuget.org.
+RUN cat > /feed/nuget.config <<'EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <configuration>
   <packageSources>
     <clear />
-    <add key="github" value="https://nuget.pkg.github.com/07artem132/index.json" />
+    <add key="local" value="/feed" />
     <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
   </packageSources>
-  <packageSourceCredentials>
-    <github>
-      <add key="Username" value="${GITHUB_USERNAME}" />
-      <add key="ClearTextPassword" value="${GITHUB_TOKEN}" />
-    </github>
-  </packageSourceCredentials>
   <packageSourceMapping>
-    <packageSource key="github">
+    <packageSource key="local">
       <package pattern="SignalCli.NET" />
       <package pattern="JSON-RPC.NET" />
       <package pattern="SignalCli.Runtime" />
@@ -59,13 +57,11 @@ RUN cat > /tmp/nuget.config <<EOF
 </configuration>
 EOF
 
-# Publish the server. The SignalCli.Runtime package's .targets stages signal-cli
-# into the build output; CopySignalCliToPublish (in the csproj) carries it into
-# the publish folder.
-RUN dotnet publish src/SignalCliNet.WsRpcServer/SignalCliNet.WsRpcServer.csproj \
+# Publish the server. The SignalCli.Runtime .targets stages signal-cli into the
+# publish output during the build that publish performs.
+RUN dotnet publish SignalCliNet.WsRpcServer/src/SignalCliNet.WsRpcServer/SignalCliNet.WsRpcServer.csproj \
         -c Release -o /app \
-        --configfile /tmp/nuget.config \
-    && rm -f /tmp/nuget.config
+        --configfile /feed/nuget.config -p:NuGetAudit=false
 
 # ----------------------------------------------------------------------------
 # Stage 2 — runtime image (ASP.NET + JDK 25 for signal-cli)

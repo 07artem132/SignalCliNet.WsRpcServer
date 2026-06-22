@@ -1,0 +1,8 @@
+**/bin/
+**/obj/
+**/signal-cli/
+.localfeed/
+SignalCliStorageData/
+.git/
+.vs/
+.idea/
