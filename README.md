@@ -1,11 +1,11 @@
 # 📲 SignalCliNet.WsRpcServer
 
 ![License](https://img.shields.io/badge/license-GPLv3-blue.svg)
-![.NET](https://img.shields.io/badge/.NET-9.0-512BD4)
+![.NET](https://img.shields.io/badge/.NET-10.0-512BD4)
 ![WebSocket](https://img.shields.io/badge/protocol-WebSocket-brightgreen)
 ![JSON-RPC](https://img.shields.io/badge/API-JSON--RPC-orange)
 
-**WebSocket JSON-RPC-сервер для взаємодії з месенджером [Signal](https://signal.org/) через бібліотеку [SignalCli.NET](https://github.com/mil-development/SignalCli.NET).**
+**WebSocket JSON-RPC-сервер для взаємодії з месенджером [Signal](https://signal.org/) через бібліотеку [SignalCli.NET](https://github.com/07artem132/SignalCli.NET).**
 
 ## 📖 Зміст
 
@@ -25,7 +25,7 @@
 
 ## 🚀 Про проєкт
 
-**SignalCliNet.WsRpcServer** — це самостійний консольний застосунок, який можна запускати й як службу. Він надає WebSocket JSON-RPC-інтерфейс для **простого підключення** до [Signal](https://signal.org/) за допомогою [SignalCli.NET](https://github.com/mil-development/SignalCli.NET).
+**SignalCliNet.WsRpcServer** — це самостійний консольний застосунок, який можна запускати й як службу. Він надає WebSocket JSON-RPC-інтерфейс для **простого підключення** до [Signal](https://signal.org/) за допомогою [SignalCli.NET](https://github.com/07artem132/SignalCli.NET).
 
 Він спрощує інтеграцію з Signal, даючи змогу:
 - 💬 Надсилати текстові повідомлення, стікери та вкладення.
@@ -51,7 +51,7 @@
     - 🩺 Health-check.
 
 4. **🌐 Кросплатформність**  
-   Працює на Windows, Linux та macOS (за умови, що `.NET 9.0+` та `JDK 21+` встановлено).
+   Працює на Windows, Linux та macOS (за умови, що `.NET 10.0+` та `JDK 21+` встановлено).
 
 5. **🔌 Легка інтеграція**  
    Підтримка будь-якої мови програмування, що вміє встановлювати WebSocket-з'єднання й обмінюватися JSON-RPC.
@@ -60,8 +60,8 @@
 
 ## 📋 Вимоги
 
-1. **.NET 9.0** або новіша версія  
-   [Завантажити](https://dotnet.microsoft.com/download/dotnet/9.0)
+1. **.NET 10.0** або новіша версія  
+   [Завантажити](https://dotnet.microsoft.com/download/dotnet/10.0)
 
 2. **JDK 21+**  
    [Завантажити](https://www.oracle.com/java/technologies/javase-downloads.html)
@@ -78,7 +78,7 @@
 
 1. Клонуйте репозиторій:
    ```bash
-   git clone https://github.com/mil-development/SignalCliNet.WsRpcServer.git
+   git clone https://github.com/07artem132/SignalCliNet.WsRpcServer.git
    ```
 2. Перейдіть у директорію проєкту:
    ```bash
@@ -90,7 +90,7 @@
    ```
 4. Опубліковані збірки будуть доступні в папці:
    ```
-   ./bin/Release/net9.0/publish
+   ./bin/Release/net10.0/publish
    ```
 
 ### 2. Запуск сервера
@@ -105,7 +105,7 @@ chmod +x SignalCliNet.WsRpcServer
 ```
 
 **📝 Примітка**: якщо виникають помилки:
-- Переконайтеся, що використовується .NET 9.0 чи новіший.
+- Переконайтеся, що використовується .NET 10.0 чи новіший.
 - Перевірте наявність JDK 21 чи новішої.
 
 ---
@@ -536,7 +536,7 @@ asyncio.run(main())
    Signal загалом підтримує вкладення розміром до ~100 МБ. (Будьте уважні до часу завантаження).
 
 3. **💻 На яких платформах працює сервер?**  
-   Перевірено на Windows, Linux і macOS. Потрібні `.NET 9.0+` та сумісна JDK.
+   Перевірено на Windows, Linux і macOS. Потрібні `.NET 10.0+` та сумісна JDK.
 
 ---
 
@@ -562,7 +562,7 @@ asyncio.run(main())
 | StreamJsonRpc    | Імплементація протоколу JSON-RPC для .NET.                               |
 | Microsoft.Extensions.* | Набір служб .NET для конфігурації, логування, DI-контейнера і хостингу.   |
 
-- [SignalCli.NET (GitHub)](https://github.com/mil-development/SignalCli.NET)
+- [SignalCli.NET (GitHub)](https://github.com/07artem132/SignalCli.NET)
 - 
 - [JSON-RPC 2.0 Specification](https://www.jsonrpc.org/specification)
 
@@ -570,7 +570,7 @@ asyncio.run(main())
 
 ## 📜 Ліцензія
 
-Проєкт поширюється за ліцензією **GNU General Public License v3.0 (GPLv3)** через використання [signal-cli (GitHub)](https://github.com/AsamK/signal-cli) і [SignalCli.NET](https://github.com/mil-development/SignalCli.NET).
+Проєкт поширюється за ліцензією **GNU General Public License v3.0 (GPLv3)** через використання [signal-cli (GitHub)](https://github.com/AsamK/signal-cli) і [SignalCli.NET](https://github.com/07artem132/SignalCli.NET).
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](http://www.gnu.org/licenses/gpl-3.0.html)
 

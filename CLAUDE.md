@@ -76,8 +76,10 @@ The `dotnet` SDK itself is `apt`-installable from `packages.microsoft.com`.
    dependency version instead. See `.claude/rules/upstream-dependencies.md`.
 2. **Upstream versions move together.** When bumping `SignalCli.NET`, `JSON-RPC.NET`, `SignalCli.Runtime`
    or the JDK, update the csproj, `NuGet.Config` (if a feed/package id changes), `deploy/Dockerfile*`,
-   and `deploy/DEPLOYMENT.md` in the **same commit** — they drift easily (the README still shows stale
-   `.NET 9.0` / `mil-development` references while the code is on net10 + `07artem132`).
+   and `deploy/DEPLOYMENT.md` in the **same commit** — they drift easily. (The README's `.NET` /
+   `07artem132` references are now aligned with the code; the one remaining stale claim is **JDK 21+** —
+   signal-cli 0.14.3 actually needs **JDK 25**, per `deploy/DEPLOYMENT.md`. Fix it when you next touch the
+   README.)
 3. **No secrets in the repo.** Signal account data lives under `SignalCliStorageData/` (git-ignored);
    never commit account keys, phone numbers, tokens, or `appsettings` overrides with real values.
 4. **Privacy in logs.** Don't log message bodies, phone numbers, or attachment payloads — mirror the

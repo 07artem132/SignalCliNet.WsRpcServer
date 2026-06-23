@@ -36,5 +36,6 @@ the single most important fact for editing it safely.
    replaces `ISubscriptionManager`/`IEventProcessor`/`IRpcServiceRegistry` with Signal-specific
    singletons. If JSON-RPC.NET later completes its composition root (audit finding H1, a generic
    `AddJsonRpcCore<...>`), revisit this method so the two don't double-register.
-5. **Known doc drift to fix when you touch the README:** badges/links still say `.NET 9.0` and
-   `mil-development` while the code is net10 + `07artem132`. `DEPLOYMENT.md` is the accurate reference.
+5. **Known doc drift to fix when you touch the README:** the `.NET` version + `07artem132` org links are
+   now aligned with the code; the remaining stale claim is **JDK 21+** — signal-cli 0.14.3 needs **JDK 25**
+   (`deploy/DEPLOYMENT.md` is the accurate reference).
