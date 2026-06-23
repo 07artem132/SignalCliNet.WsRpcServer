@@ -11,16 +11,17 @@
 
     <ItemGroup>
       <PackageReference Include="JSON-RPC.NET" Version="1.1.0" />
-      <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
-      <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
-      <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.0" />
-      <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.0" />
+      <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.9" />
+      <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.9" />
+      <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.9" />
+      <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.9" />
       <PackageReference Include="NetCoreServer" Version="8.0.7" />
       <PackageReference Include="SignalCli.NET" Version="4.10.0" />
       <PackageReference Include="SignalCli.Runtime" Version="0.14.3.1" />
-      <PackageReference Include="StreamJsonRpc" Version="2.21.69" />
+      <PackageReference Include="StreamJsonRpc" Version="2.25.29" />
       <!-- Закриваємо транзитивну вразливість StreamJsonRpc → MessagePack 2.5.192
-           (GHSA-hv8m-jj95-wg3x / NU1903). 2.5.302 — остання патчена 2.5.x. -->
+           (GHSA-hv8m-jj95-wg3x / NU1903). 2.5.302 — патчена 2.5.x, і саме її тягне
+           StreamJsonRpc 2.25.29 транзитивно. -->
       <PackageReference Include="MessagePack" Version="2.5.302" />
     </ItemGroup>
 
