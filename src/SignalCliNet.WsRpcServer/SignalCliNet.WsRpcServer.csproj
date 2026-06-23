@@ -19,6 +19,9 @@
       <PackageReference Include="SignalCli.NET" Version="4.10.0" />
       <PackageReference Include="SignalCli.Runtime" Version="0.14.3.1" />
       <PackageReference Include="StreamJsonRpc" Version="2.21.69" />
+      <!-- Закриваємо транзитивну вразливість StreamJsonRpc → MessagePack 2.5.192
+           (GHSA-hv8m-jj95-wg3x / NU1903). 2.5.302 — остання патчена 2.5.x. -->
+      <PackageReference Include="MessagePack" Version="2.5.302" />
     </ItemGroup>
 
     <ItemGroup>
