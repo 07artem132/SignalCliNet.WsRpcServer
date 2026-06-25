@@ -620,6 +620,31 @@ admit(principal, account, recipient):
   - **listGroups:** уточнення стосувалось лише «лінк-акаунтів» → admin-listGroups-scope НЕ розширюю автоматично (groups лишаються per-claim/own — G9/R3.2); потрібен admin-перегляд усіх груп — окреме рішення.
 - *Власник:* Phase-2 task-1 (role-conditional outbound filter) + task-8 (admin bootstrap/role) + task-11 (audit). DoD: «admin `listAccounts` → усі лінк-акаунти; user → лише own+shared; admin all-accounts read у audit-trail; admin НЕ шле через чужий приватний акаунт без явної audited-операції».
 
+### Рішення власника (3.7) — Docker deploy/e2e: максимум автоматизації без зниження безпеки (2026-06-25)
+
+**Принцип:** зсув від «апка кастодить секрети» до «платформа шифрує том + апка auto-gen+persist секрети на ньому». Автоматизація і безпека тут НЕ конфліктують — підхід ще й підвищує безпеку.
+
+- **At-rest = ПЛАТФОРМНИЙ encrypted volume, НЕ app-LUKS у контейнері.** LUKS/dm-crypt усередині контейнера потребує `--privileged`/`CAP_SYS_ADMIN` = **гірша** безпека. Натомість: cloud KMS-keyed disk (encrypted EBS/PD) або host dm-crypt; контейнер пише в змонтований том, шифр прозорий, ключ — у платформи/KMS, апка його **не торкається**. Апка: `0700` + писати секрети ЛИШЕ на цей том. **Замінює** «LUKS-том»-формулювання D-секції/task-9 на «encrypted volume (платформа/host), app-agnostic до ключа».
+- **Auto-gen+persist-once на томі:** TLS/CA (R3.4) + **пеппери (`pepper_token`/`pepper_abuse`)** — CSPRNG на first-boot, persist на encrypted-том, НІКОЛИ в env/logs. Безпечніше за env-provisioning (env тече через `/proc`, `docker inspect`, crash-dump — D17/G5). Знімає peppers як деплой-блокер.
+- **Build-secret:** BuildKit `--secret id=ghtoken` (read:packages) — не потрапляє в шари образу; або task-0 bump + sibling-build офлайн.
+- **Admin-token:** `0600`-файл на томі; prod — `docker exec/cp` один раз; e2e — harness читає з тому. Ніколи stdout/logs (G5).
+- **Single-instance:** lockfile + `replicas=1` (compose no-scale / k8s `Recreate`, G1).
+- **e2e specifics:** harness монтує test-account-secret → піднімає контейнер → читає **згенеровані** CA+admin-token з тому → ганяє матрицю проти **реального** bootstrap-шляху. **БЕЗ** test-only fixed-pepper / no-auth-флага (D4 backdoor-ризик) — тест читає згенероване → **`test == prod` code-path**. Це і є «без зниження безпеки». Єдиний інжектований секрет = `SIGNALCLI_TEST_ACCOUNT` (номер).
+  - *Scope-уточнення (не перечитувати як «e2e доводить прод»):* ідентичні саме **код+безпекові механізми** (bootstrap/auth/cert/pepper/isolation), НЕ повне середовище. Відрізняються контрольовано (без послаблення): test-акаунт замість реальних номерів, ефемерний том замість довгоживого, harness читає секрети замість оператора, внутрішня експозиція замість public-за-L4, короткий прогін замість мультитенант-scale. Тому e2e **НЕ доводить:** реальну мережеву експозицію/L4, Signal rate-limit/ban на продовому обсязі, реальний клієнт (MV3-розширення — C1-C6 consumer-side), мультитенант-scale/довгу стабільність, фактичне ввімкнення encrypted-volume (окремий deploy-config-чек). Прод-специфіку валідувати окремо.
+- **Нескоротні людські входи (інакше — реальне зниження):** (a) реєстрація Signal-акаунта (номер; не авто-реєструється — SMS/captcha); (b) build-token раз; (c) **encrypted-volume МУСИТЬ бути ON** (пропустити заради автоматизації = ОСЬ це зниження); (d) one-time retrieval admin-токена (prod; e2e читає сам).
+- *Власник:* `deploy/Dockerfile*`+compose (Phase-1 task-2/5), `Program.cs` startup (auto-gen+persist), Phase-2 task-9 (supersede LUKS-framing на encrypted-volume). DoD: «чистий `docker compose up` БЕЗ секрет-env → робочий wss + згенеровані CA/пеппери/admin-token на encrypted-томі; рестарт переюзає; e2e-harness читає їх із тому й ганяє матрицю; нуль секретів у env/logs/шарах образу».
+
+### Рішення власника (3.8) — Адміністрування: admin = mTLS-консьюмер, клієнт CLI-first (2026-06-25)
+
+**Принцип:** адмін — це **ще один споживач** того самого WS JSON-RPC контракту (R3.3) з `role=admin`; жодного окремого admin-протоколу — ті самі методи через той самий chokepoint, лише admin-політика їх пропускає.
+
+- **Auth — mTLS client-cert (НЕ token/PoP):** адмін автентифікується **mTLS client-cert**, виданим **авто-ген CA сервера (R3.4)** на bootstrap → `NodeIdentity` → `ClaimsPrincipal` `role=admin`. Це фреймворковий `secure-transport-mtls` (2.6.0) + authz (2.7.0) — **здебільшого вже є** після task-0 bump'у; бспоук token/PoP-стек адміну НЕ потрібен (token+PoP — лише для браузерного розширення, що client-cert не вміє). Cred (cert+key) — в **OS-keystore** (DPAPI/keychain/libsecret), не IndexedDB (то браузерний кейс C1).
+- **Admin RPC-поверхня (Phase-2):** `listAccounts(all)` (R3.6) · identities (list / promote→admin / revoke-каскад) · invites (видати / статус / per-code cap, task-7) · group-claims + abuse-log нагляд · audit-trail (task-11) · bot device/destructive ops (за `EnableDestructiveOperations`) · health/budgets (Phase-3). Усі — через chokepoint, admin-політика; не-admin principal на admin-метод → `-32001`.
+- **Клієнт — РІШЕННЯ: CLI-first.** admin-CLI (scriptable: enrollment cert на bootstrap, видача інвайтів, revoke, audit-dump) — лягає на bootstrap-файл (G5) + R3.7-автоматизацію (CI/headless). GUI — **Avalonia** (крос-платформ XAML/MVVM, бо сервер Linux/Docker), опційно пізніше; **НЕ WPF** (Windows-lock). Клієнт — окремий консьюмер (R3.3), поза 3 server-репо; reference-CLI може жити в `example/`.
+- **Bootstrap:** перший старт генерує admin client-cert (або CSR-flow) у `0600`-файл/keystore (G5 — не stdout/logs); ідемпотентно (D14/task-8). Admin-cert має власний lifecycle/revoke (CA CRL або стор).
+- **Transport hardening (опційно):** admin-listener може бути mTLS-only та/або окремий порт/loopback (high-privilege; аналогічно метрикам D13).
+- *Власник:* Phase-2 task-8 (admin bootstrap → cert) + task-1 (admin RPC-поверхня через chokepoint, role-conditional). DoD: «admin автентифікується mTLS-cert від CA сервера → role=admin; admin-CLI робить bootstrap/invite/revoke/audit-dump; не-admin cert/токен на admin-метод → -32001».
+
 ## Глобальний Definition of Done (для КОЖНОЇ фази)
 
 Фаза не закрита, поки не виконані всі три умови:
