@@ -367,9 +367,9 @@ WsRpcServer — **тільки транспорт Signal-каналу** унів
 
 #### N-серія — консистентність плану vs репозиторій
 
-**🔴 N6. Уся delegation-стратегія посилається на агентів, яких у середовищі НЕМАЄ.**
-- *Доказ:* таблиця делегування + кожен task-`→` маршрутизують у `cavecrew-investigator`/`cavecrew-builder`/`cavecrew-reviewer`; доступні тут лише `claude`/`Explore`/`general-purpose`/`Plan`/`claude-code-guide`/`statusline-setup`. Операційна модель «головний потік оркеструє, делегую» + усі `cavecrew-reviewer`-DoD-гейти (рядки 414/423/557/587) **інопераб. як написано**.
-- *Мітигація:* перемапити на наявні агенти (Explore — пошук/мапа; general-purpose — фіча+тести; самостійне ревю — інлайн або general-purpose), або зробити імена середовище-агностичними.
+**🟠 N6 (знижено Проходом-4 з 🔴 — факт вірний, «уся стратегія непрацездатна» переоцінено). Delegation-стратегія маршрутизує задачі у `cavecrew-*` агентів, яких у середовищі немає.**
+- *Доказ:* таблиця делегування + частина task-`→` називають `cavecrew-investigator/builder/reviewer`; доступні тут `claude`/`Explore`/`general-purpose`/`Plan`/`claude-code-guide`/`statusline-setup`. **Знижено:** `Explore` і `general-purpose` **уже є** в таблиці першокласними рядками → лише investigator/builder/reviewer-рядки + їх `→` і `cavecrew-reviewer`-DoD-гейти треба перемапити; технічна робота не блокується, фікс механічний.
+- *Мітигація:* перемапити (Explore — пошук/мапа; general-purpose — фіча+тести; ревю — інлайн або general-purpose), або зробити імена середовище-агностичними.
 
 **🟠 N7. README досі «JDK 21+» (3 місця) попри branch-правку README.**
 - *Доказ (перевірено):* `README.md:54,66,109` = «JDK 21+»/«JDK 21»; має бути **JDK 25** (signal-cli 0.14.3, class-file 69). CLAUDE-rule #2 це прямо називає; branch виправив `.NET`/`07artem132`, але JDK лишив.
@@ -407,7 +407,7 @@ WsRpcServer — **тільки транспорт Signal-каналу** унів
 - *Мітигація:* пінити allowlist на **конкретний** `chrome-extension://<id>`, прибрати гілку «or null», не продавати Origin як значущий defense-in-depth — спиратись на token+PoP.
 
 **🟠 C4. Браузер ОБРИВАЄ конект, якщо сервер не echo-ить offered субпротокол → дефолт NetCoreServer (echo-ить нічого) робить реального клієнта неконектабельним.**
-- *Доказ:* RFC 6455 §4.2.2 — клієнт, що offered субпротоколи, **fail-ить конект**, якщо сервер не вибрав жодного (або вибрав не-offered). NetCoreServer-дефолт (W11) echo-ить нічого → реальний браузерний `WebSocket([token-proto, real-proto])` **не досягає `open`**.
+- *Доказ:* RFC 6455 сам по собі **дозволяє** серверу не вибрати жодного (§4.1 fail лише на НЕ-offered). Але керівний для браузера — **WHATWG WebSockets Standard** (не сирий RFC): якщо клієнт подав непорожній список протоколів, а 101 не має співпадаючого `Sec-WebSocket-Protocol`, алгоритм fail-ить з'єднання → Chrome шле `error`/`close`, не `open`. NetCoreServer-дефолт (W11) echo-ить нічого → реальний браузерний `WebSocket([token-proto, real-proto])` **не досягає `open`**.
 - *Наслідок:* явний `SetHeader("Sec-WebSocket-Protocol", <real-non-auth>)` у `OnWsConnecting` — **connectivity-блокер**, не лише hardening. Поточний DoD (echo-leak) тестує лише negative і пропустив би сервер, що взагалі не конектиться.
 - *Мітигація:* у Phase-2 task-4 трактувати echo-real-subprotocol як обов'язкову connectivity-логіку; додати позитивний DoD «браузерний WS досягає `open` (сервер echo-нув real-субпротокол)»; ніколи не копіювати весь client-list (інакше токен у response).
 
@@ -420,6 +420,33 @@ WsRpcServer — **тільки транспорт Signal-каналу** унів
 - *Доказ:* push (FCM) будить SW із `waitUntil`, але під тими ж 30с/5хв-капами (C2); доставка coalesce-абельна/drop-абельна під квотою; часті wake без UI → Chrome throttle. Push-payload ~4KB cap.
 - *Наслідок:* сервер не може припускати, що нотіфи прибувають із тією ж частотою, що емітяться події; client-coalescing (Уточнення-4) і server-budget (D2/G2) — два незалежні лімітери, не зведені; сервер бачить lossy/reordered/bursty subset.
 - *Мітигація:* idempotency/dedup (C2) + budget-облік мають це толерувати; одне-рядкова нотатка у Phase-3 task-3 про необмежену throttle-абельну wake→connect-латентність.
+
+### Звірка-6 — Прохід 4: аудит плану проти ВЛАСНОЇ імплементації апки (2026-06-25)
+
+Прохід 4: (а) адверсаріальна верифікація Проходу-3 — **C1 вистояла 🔴, C3/C4 🟠** (цитату C4 виправлено на WHATWG-шар), **N6 знижено 🔴→🟠**; (б) completeness-critic. Спільний корінь A-серії: Звірки-1…5 аудитували *дизайн плану проти upstream-коду*, але майже ніколи — *проти власної наявної імплементації апки* як субстрату, на який Phase-2/3 прищеплюється. Цей субстрат місцями ворожий плану. A1/A2 підтверджено мною в коді (cite-and-read).
+
+**🔴 A1. «Реєструй кожен DTO або runtime-`NotSupportedException`» — для ЦІЄЇ апки ХИБНЕ; реальний ризик інвертований (тихий rot під reflection-fallback).**
+- *Доказ:* `SignalRpcSession.cs:79-82` — `JsonTypeInfoResolver.Combine(SignalCliSerializerContext.Default, new DefaultJsonTypeInfoResolver())`. Reflection-fallback резолвить **будь-який** незареєстрований тип → новий `RedeemInviteRequest`/`TokenRecord` серіалізується без помилки; обіцяного V9/conventions.md tripwire (`NotSupportedException`) **не існує**. (Це прямо спростовує `.claude/rules/conventions.md` «unregistered type fails at runtime under source-gen».)
+- *Наслідок:* інструкція V9 «додати DTO у context» і **непотрібна** для коректності (reflection покриває), і **неенфорсена** (апка не має regression-guard machinery, per app CLAUDE.md) → source-gen context гниє; якщо колись `PublishAot`/`PublishTrimmed`/`JsonSerializerIsReflectionEnabledByDefault=false` — усі незареєстровані DTO ламаються разом, без тесту що ловить. Нині дрімає (AOT/trim-флагів нема), але план додає цілу DTO-родину без дисципліни.
+- *Мітигація:* або визнати reflection-fallback як свідомий (і прибрати «реєструй кожен» з плану/conventions), або додати app-level regression-guard (тест, що енумерує серіалізовані типи) — інакше інваріант декоративний.
+
+**🔴 A2. Апка ШИП'ИТЬ phone-number/param-firehose СЬОГОДНІ; privacy-контракт структурно неенфорсений (W6 — лише вершина).**
+- *Доказ:* `SignalRpcSession.cs:104-109` — `new TraceSource("StreamJsonRpc"){ Switch.Level = Information }` + `ConsoleTraceListener` на `JsonRpc.TraceSource`. StreamJsonRpc на Information трейсить **повні тіла RPC, включно з params** → це **точно той третій token-leak-вектор**, який план відкладає у Phase-3 task-2, вже ввімкнений безумовно: кожен `sendTextMessage`/(майбутній)`authenticate` param у консоль = `docker logs`. Plus 5 account(=E.164)-сайтів: `SignalMessageRpcAdapter.cs:25` (Information, W6), `Events/EventProcessor.cs:71` (Debug), `Subscriptions/SubscriptionManager.cs:57-58,70-71,85` (×3), `Subscriptions/SubscriptionStore.cs:110` (account у RPC-відповідь list-subscriptions, не лише лог). Нема LoggerMessage-дисципліни, нема privacy-тесту.
+- *Наслідок:* щойно Phase-2 пустить auth-params, токени потечуть у `docker logs` через цей trace-listener — план пише redact-allowlist (Phase-3) так, ніби логування стартує чисте; воно ні, і найгірший порушник — trace-listener, не адаптери.
+- *Мітигація:* Phase-1 quick-fix — прибрати безумовний `ConsoleTraceListener` (або гейтнути Debug-білдом/конфігом + redact), вичистити account-сайти; зафіксувати, що privacy-контракт без guard-тесту неенфорсений у цій апці.
+
+**🟠 A3. Config/options-валідація: апка не вмикає фреймворковий fail-fast; D4 «fail-closed startup» не має субстрату.**
+- *Доказ:* `SignalRpcExtensions.cs:21-26` кличе `AddJsonRpcCore(configureOptions)` (1.1.0 config-only) без `ValidateOnStart`/`JsonRpcServerConfigValidator` (той `[OptionsValidator]` прийшов у 1.3.0 — у пінненому 1.1.0 його може й не бути). `Program.cs:51-61` біндить `Server:Host/Port` руками (`serverSection["Host"]` + `int.TryParse` + тихий fallback), без `[Range]`/`[Required]`/fail-fast; `appsettings.json` шипить `Host:"0.0.0.0"` — небезпечний дефолт D4 **живий у закоммічченому конфізі**. Нова Phase-2-конфіга (pepper-шляхи, rate-limit, TLS-cert, auth-on/off, LUKS-ключ) — **нуль валідації**, а це саме knobs де misconfig = open relay.
+- *Мітигація:* task-0 приносить валідатор — у план явно «wire `ValidateOnStart` + `[OptionsValidator]` для нової auth-конфіги»; без цього D4 нема на чому тримати.
+
+**🟠 A4. Disposal/lifecycle наявної сесії вже крихкий — субстрат для per-connection auth-стану недетермінований.**
+- *Доказ:* `SignalRpcSession.cs:148` `OnWsDisconnected` — `public override async void` (unobserved-exception hazard); `:187` `await Task.Run(() => JsonRpc.Dispose())` (offload sync-dispose у thread-pool); `:236` `_ = _messageHandler.ProcessReceivedDataAsync(...)` + `:256` `_ = DisconnectAsync()` — **три незалежні fire-and-forget** без узгодженого порядку. Фреймворкове critical-rule #3 (cancel→drain→dispose) — інваріант *фреймворку*, але апка **субкласиться** і override-ить саме ці методи → може локально його перемогти.
+- *Наслідок:* Phase-2 примітиви (Principal-lifetime, PoP-pending gate D8/G8, auth-timeout, revoke-tears-down-this-socket D9) живуть у `SignalRpcSession`; ліпити детерміновану auth-стан-машину на сесію, де `_cts.Cancel()` гониться з `Task.Run(Dispose)` і двома fire-and-forget — реальний інтеграційний ризик, не зважений.
+- *Мітигація:* у Phase-2 перед auth-стан-машиною — впорядкувати teardown сесії (await-able dispose-chain, без `async void`/fire-and-forget на критичному шляху).
+
+**🟠 A5. RPC-поверхня не версіонована — Phase-2 = flag-day breaking для незалежно-розгорнутого розширення.**
+- *Доказ:* `sendTextMessage(account,recipients,message)` (`ISignalMessageRpc`, adapter `:19-24`) сьогодні викликається будь-яким клієнтом без auth. Phase-2 додає обов'язковий subprotocol-токен на upgrade (плейнтекст-клієнт ламається на handshake) + PoP (непідписані ламаються) + principal-фільтр на `listAccounts`/`listGroups` (та сама назва, **інший result-set** — тихий behavioral-break) + default-deny `-32601` на неенумерований метод. **Нема** method-version/`apiVersion`-handshake/capability-negotiation/deprecation-window. Розширення — окремий деплой (план це каже) → Phase-1→2 апгрейд сервера = flag-day для кожного розгорнутого розширення.
+- *Мітигація:* увести `apiVersion`/capability-negotiation у handshake АБО transition-вікно (приймати і authed, і unauthed тимчасово) + узгодити реліз сервера з релізом розширення; зафіксувати у contract-докс (Phase-3 task-3).
 
 ## Глобальний Definition of Done (для КОЖНОЇ фази)
 
