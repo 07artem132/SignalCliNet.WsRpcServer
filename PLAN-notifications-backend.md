@@ -611,6 +611,15 @@ admit(principal, account, recipient):
 - *Наслідок для W25 (daemon не ізолює акаунти):* ізоляція має триматись і для **incoming** — повідомлення own-account юзера A ніколи не сурфейсити юзеру B (не лише outbound listAccounts/listGroups, а й будь-яка receive/event-поверхня Phase-3). Per-account scoping на вході — обов'язковий.
 - *Власник:* Phase-2 task-1 (`listAccounts` outbound: own-linked лише власнику) + task-3 (стор прив'язок `account→owning-identity` + private-флаг) + group-claim task (сканер scoped до shared-bot). DoD: «A не бачить own-linked акаунт B у `listAccounts`; код-сканер не чіпає own-account incoming; own-account `listGroups` повертає всі групи власника без claim».
 
+**R3.6 — Адмін бачить ВСІ лінковані акаунти (override R3.5 для admin-ролі).**
+- *Правило:* `listAccounts` для principal з `role=admin` повертає **всі** акаунти (спільний бот + усі own-linked усіх юзерів). Для `role=user` — лише own+shared (R3.5). Outbound-фільтр `FilterReadOutputAsync` — **role-conditional**: admin → all-allow гілка, user → own+shared; default-deny (W22 fail-closed: виняток → empty, ніколи raw).
+- *Visibility ≠ operation (рекомендований дефолт):* адмін **бачить** (lists) усі лінк-акаунти для нагляду; **слати/керувати** через чужий приватний own-linked — НЕ default (impersonation/privacy). Revoke/unlink чужого акаунта адміном — окрема **admin-account-management** операція (аудиту, не silent send-as). [Якщо треба, щоб адмін ще й слав через будь-який акаунт — окрема явна audited-capability; зараз НЕ закладено.]
+- *Наслідки:*
+  - **Blast-radius:** admin-компрометація = бачить номери/девайси всіх → admin-роль під жорстким контролем (D14/task-8 bootstrap one-time-токен у `0600`-файл, G5; PoP для адміна; admin-токен з власним lifecycle/revoke).
+  - **Audit (M8/task-11):** admin-перегляд усіх акаунтів = чутливий read → у audit-trail (без номерів у тілі — лише «admin X: listAccounts(all)», count).
+  - **listGroups:** уточнення стосувалось лише «лінк-акаунтів» → admin-listGroups-scope НЕ розширюю автоматично (groups лишаються per-claim/own — G9/R3.2); потрібен admin-перегляд усіх груп — окреме рішення.
+- *Власник:* Phase-2 task-1 (role-conditional outbound filter) + task-8 (admin bootstrap/role) + task-11 (audit). DoD: «admin `listAccounts` → усі лінк-акаунти; user → лише own+shared; admin all-accounts read у audit-trail; admin НЕ шле через чужий приватний акаунт без явної audited-операції».
+
 ## Глобальний Definition of Done (для КОЖНОЇ фази)
 
 Фаза не закрита, поки не виконані всі три умови:
