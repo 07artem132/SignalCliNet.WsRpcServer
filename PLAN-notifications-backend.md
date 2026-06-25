@@ -605,6 +605,12 @@ admit(principal, account, recipient):
   - **Renewal:** авто-cert має expiry → на старті renew, якщо прострочений/близько; CA — довший термін.
 - *Власник:* Phase-2 task-9 + `Program.cs` startup. DoD: «чистий старт без cert-конфігу → робочий wss + персистований CA; рестарт переюзає той самий CA (client-trust не ламається)».
 
+**R3.5 — Особисто-лінкований акаунт = приватний власнику; отримується через `listAccounts`; claim/scan — лише shared-bot.**
+- *Правило:* own-linked акаунт (юзер залінкував свій номер) — **приватний виключно для identity, що його залінкувала**. Видимий лише у **його** `listAccounts` (спільний бот read-only + власні лінковані; чужі приватні — НІКОЛИ). Для власного акаунта — **повне володіння**: `listGroups` повертає ВСІ групи цього акаунта (claim НЕ потрібен — це його номер). Group-claim код-флоу — **виключно shared-bot концепт**.
+- *Наслідок для R3.1 (auto-receive):* код-сканер бігає **лише по receive-потоку shared-bot акаунта**, НЕ по приватних own-linked (нема сенсу сканувати приватний трафік юзера на коди + privacy-overreach). Own-linked auto-receive — лише для sync/власних потреб; incoming приватний власнику.
+- *Наслідок для W25 (daemon не ізолює акаунти):* ізоляція має триматись і для **incoming** — повідомлення own-account юзера A ніколи не сурфейсити юзеру B (не лише outbound listAccounts/listGroups, а й будь-яка receive/event-поверхня Phase-3). Per-account scoping на вході — обов'язковий.
+- *Власник:* Phase-2 task-1 (`listAccounts` outbound: own-linked лише власнику) + task-3 (стор прив'язок `account→owning-identity` + private-флаг) + group-claim task (сканер scoped до shared-bot). DoD: «A не бачить own-linked акаунт B у `listAccounts`; код-сканер не чіпає own-account incoming; own-account `listGroups` повертає всі групи власника без claim».
+
 ## Глобальний Definition of Done (для КОЖНОЇ фази)
 
 Фаза не закрита, поки не виконані всі три умови:
