@@ -254,11 +254,12 @@ WsRpcServer — **тільки транспорт Signal-каналу** унів
 
 ### Звірка-4 — multi-agent ревю плану проти коду (четверта ітерація, 2026-06-25)
 
-Прохід 1-2 паралельними агентами: аудит усіх `file:line`-цитат, обсягу version-bump, app-side, SignalCli.NET-поверхні, deploy/CI, handshake-seam, внутрішніх суперечностей плану та адверсаріальний security-review. Цитати Звірки-1/2/3 **усі підтверджені** (дрібний drift: `SignalDevices.cs:42` = декларація, реальний `InvokeMethodAsync("finishLink")` `:51-57`; `RpcAuthorizationEnforcer.cs:43` = коментар, тіло `:34-60`; `SignalCliOptionsExtensions.cs:46-47` — там `jsonRpc`+receive-mode, account-арга в launch немає взагалі). Нижче — лише **нові** знахідки. **W1, W12, W13 — keystone-блокери: читати першими.**
+Прохід 1-2 паралельними агентами: аудит усіх `file:line`-цитат, обсягу version-bump, app-side, SignalCli.NET-поверхні, deploy/CI, handshake-seam, внутрішніх суперечностей плану та адверсаріальний security-review. Цитати Звірки-1/2/3 **усі підтверджені** (дрібний drift: `SignalDevices.cs:42` = декларація, реальний `InvokeMethodAsync("finishLink")` `:51-57`; `RpcAuthorizationEnforcer.cs:43` = коментар, тіло `:34-60`; `SignalCliOptionsExtensions.cs:46-47` — там `jsonRpc`+receive-mode, account-арга в launch немає взагалі). Нижче — лише **нові** знахідки. **W13, W20 — keystone: читати першими.** ⚠ W1 та W12 (спершу 🔴) **спростовані** адверсаріальним Проходом-3 (репро + код); W18 знижено 🔴→🟠 — корекції inline нижче (деталі у Звірці-5).
 
-**🔴 W1. Офлайн-білд зламаний СЬОГОДНІ → блокує Фазу 1, не лише Фазу 2 (інвертує діаграму порядку §486).**
-- *Доказ:* `build-local-feed.sh:54-55` пакує sibling-джерело **без `-p:Version`** → бере `JSON-RPC.NET/Directory.Build.props:39` = **2.7.0**; апка пінить `JSON-RPC.NET 1.1.0` (`csproj:13`); `NuGet.Config:9-13` packageSourceMapping забороняє fallback на nuget.org. → `dotnet restore` падає «Unable to find package 1.1.0, found 2.7.0». Приватний feed (unreachable) теж не має 1.1.0. Тобто Phase-1 task-2 (docker build) і task-5 (clean `docker compose up` e2e) **не пройдуть** до bump'у, який план відкладає у Phase-2 task-0.
-- *Мітигація:* або **перенести task-0 (bump 1.1.0→2.7.0) ПЕРЕД Фазу 1**, або будувати Фазу 1 через hand-pinned feed (checkout `JSON-RPC.NET` на тегу 1.1.0, не sibling-2.7.0). Перший варіант чесніший — Фаза 1 однаково потребує робочого білда.
+**🟡 W1 (СПРОСТОВАНО Проходом-3, було 🔴 — механізм хибний, висновок колапсує у W4).**
+- *Спростування (емпірично відтворено):* `Version="1.1.0"` проти джерела, де є **лише 2.7.0**, NuGet трактує як floor → резолвить 2.7.0 з **NU1603 (warning), exit 0**; restore НЕ падає, а csproj апки не має `TreatWarningsAsErrors` → білд теж не зупиняється на NU1603. Тобто «restore падає → блокує Фазу 1» — неправда; «інверсії діаграми порядку» немає (знімає й N8).
+- *Залишок:* офлайн local-feed **тихо up-resolve-ить** 1.1.0→2.7.0, тож апка компілюється проти 2.7.0 і впирається у breaking-compile — а це **вже W4** (template-method-інверсія). Приватний feed із реальним 1.1.0 — не зачеплений. Фаза 1 офлайн зламана НЕ на restore, а на compile → колапсує у W4.
+- *Мітигація:* у рамках W4 — пінити local-feed на справжній 1.1.0 (checkout тегу) АБО свідомо bump'ати; на час Фази 1 підняти `NU1603`→error, щоб мовчазний up-resolve не скомпілював проти не того пакета.
 
 **🟠 W2. CI-ordering gap: DoD кожної фази вимагає «CI зелений», CI створюється лише Phase-3.**
 - *Доказ:* `.github/workflows/` в апці **немає** (лише `copilot-instructions.md`); Phase-1 DoD (§304) і глобальний DoD (§260) вимагають «CI зелений», але CI = Phase-3 task-7. Plus «test»-нога CI порожня до Phase-1 task-4 (нема `tests/`).
@@ -302,9 +303,9 @@ WsRpcServer — **тільки транспорт Signal-каналу** унів
 
 #### Внутрішні суперечності плану (reasoning-прохід — пари, які план не зводить)
 
-**🔴 W12. Anti-ban реактивний детект потребує receive-каналу, який Phase-1 вимикає, а Phase-3 робить «опційним».**
-- *Доказ:* D2/Уточнення-6/Phase-3 task-6 покладаються на детект `-5`/`-6`/proof-required; план припускає, що всі вони приходять синхронно як типізовані винятки з **send**-виклику. Але Signal часто сигналить throttle/proof-required **асинхронно через receive** (demon у `manual`, V2). Receive = «Опційно… відкласти» (Phase-3 task-5) **прямо суперечить** anti-ban як load-bearing.
-- *Мітигація:* емпірично довести, що КОЖЕН ban-релевантний сигнал приходить на return-path `InvokeMethodAsync`; якщо ні — receive стає **обов'язковим** для anti-ban, не опційним. Це може підняти receive у Phase-2.
+**❌ W12 (СПРОСТОВАНО Проходом-3 — було 🔴, хибна).**
+- *Спростування:* `-4/-5/-6` (UntrustedIdentity/RateLimit/CaptchaRejected) приходять як **error у JSON-RPC ВІДПОВІДІ на send-виклик** (signal-cli шле всі помилки на stdout тим самим каналом, що й success-відповіді), і мапляться синхронно на return-path `InvokeMethodAsync` (`JsonRpcClient.cs:506-515`). У `SignalEventService` **немає** event-kind для rate-limit/captcha/proof (grep порожній). Send-only MVP **бачить** ці сигнали; вимкнений receive НЕ засліплює anti-ban. Передумова «Signal сигналить throttle асинхронно через receive» — без опори в коді.
+- *Висновок:* anti-ban реактивний детект сумісний із send-only; D2/Phase-3 task-6 коректні як є.
 
 **🔴 W13. G3 ⊥ G11 — взаємовиключні, план перелічує обидва як сумісні.**
 - *Доказ:* G3 вимагає atomic-locked-**durable** декремент бюджету ПЕРЕД кожним send (correctness); G11 визнає цей single-SQLite-writer bottleneck'ом і пропонує coalesce-на-таймері. Але coalesce **ламає** «persist ДО send» fail-safe: send комітиться в Signal до durable-декременту → crash-window over-send → бан (саме те, що Уточнення-6 забороняє).
@@ -328,8 +329,8 @@ WsRpcServer — **тільки транспорт Signal-каналу** унів
 
 #### Адверсаріальний security-review (нові діри поза D/G/V)
 
-**🔴 W18. HMAC pre-image не канонізований.**
-- *Ризик:* не зафіксовано ЯКИЙ рядок HMAC-иться (raw-wire / base64url-decoded / prefix+checksum-stripped). Mismatch issue↔lookup → масовий fail-closed (DoS) або, якщо prefix/checksum теж у pre-image, колізії.
+**🟠 W18 (знижено Проходом-3 з 🔴). HMAC pre-image не канонізований.**
+- *Ризик:* не зафіксовано ЯКИЙ рядок HMAC-иться (raw-wire / base64url-decoded / prefix+checksum-stripped). Mismatch issue↔lookup → масовий fail-closed або колізії. Знижено: збій — детермінований impl-баг (перший lookup падає в інтеграц-тесті), не латентна діра; «HMAC(token,pepper)» найприродніше читається як «весь рядок токена».
 - *Мітигація:* одна канонічна форма (тільки decoded random payload, без prefix/checksum) на обох сайтах + round-trip тест-пін.
 
 **🟠 W19. «Constant-time compare» обіцянка хибна для stored-lookup моделі.**
@@ -359,6 +360,66 @@ WsRpcServer — **тільки транспорт Signal-каналу** унів
 **🟠 W25. Крос-тенант через внутрішній стан спільного signal-cli (окремо від G9).**
 - *Ризик:* один daemon / один `--config`-том, signal-cli НЕ ізолює акаунти. Лінкований own-number юзера зберігає contacts/groups/profile-key у спільному сторі; daemon-внутрішній cross-account sync/contact-merge/profile-key-sharing може сурфейснути дані A через запит, легітимно авторизований для іншого акаунта. App-фільтр (account-level) структурно не дістає **всередину** daemon. G9 — shared-bot `listGroups`; це **own-number** leak через daemon-стан.
 - *Мітигація:* per-account storage-ізоляція (окремий `--config` на own-number, або daemon-per-tenant), АБО емпіричний аудит + задокументований accepted-risk; app-фільтрування = necessary-but-insufficient.
+
+### Звірка-5 — Прохід 3: doc-консистентність + клієнт-контракт + адверсаріальна верифікація (2026-06-25)
+
+Прохід 3 — три агенти: (а) **адверсаріальна верифікація** keystone-знахідок Звірки-4 — результат застосовано inline вище: **W1/W12 спростовано** (NU1603 floor-resolution / send-response error-path), **W18 знижено** 🔴→🟠; **W13, W20 вистояли 🔴**, **W22 — 🟠**; (б) консистентність DoD/docs/strategy; (в) feasibility клієнтського контракту MV3/WebCrypto/WebSocket. Усі IDs чисті (D1-D17, G1-G13, V1-V11, W1-W25 — без dangling/duplicate). N8 (ordering-діаграма ⊥ W1) **знято** разом зі спростуванням W1.
+
+#### N-серія — консистентність плану vs репозиторій
+
+**🔴 N6. Уся delegation-стратегія посилається на агентів, яких у середовищі НЕМАЄ.**
+- *Доказ:* таблиця делегування + кожен task-`→` маршрутизують у `cavecrew-investigator`/`cavecrew-builder`/`cavecrew-reviewer`; доступні тут лише `claude`/`Explore`/`general-purpose`/`Plan`/`claude-code-guide`/`statusline-setup`. Операційна модель «головний потік оркеструє, делегую» + усі `cavecrew-reviewer`-DoD-гейти (рядки 414/423/557/587) **інопераб. як написано**.
+- *Мітигація:* перемапити на наявні агенти (Explore — пошук/мапа; general-purpose — фіча+тести; самостійне ревю — інлайн або general-purpose), або зробити імена середовище-агностичними.
+
+**🟠 N7. README досі «JDK 21+» (3 місця) попри branch-правку README.**
+- *Доказ (перевірено):* `README.md:54,66,109` = «JDK 21+»/«JDK 21»; має бути **JDK 25** (signal-cli 0.14.3, class-file 69). CLAUDE-rule #2 це прямо називає; branch виправив `.NET`/`07artem132`, але JDK лишив.
+- *Мітигація:* виправити 3 рядки на JDK 25 при наступному дотику README (поза скоупом plan-доку, але блокер чистоти rule #2).
+
+**🟠 N3. Phase-2 DoD не має чекбоксу для G11; G11 — unowned жодним DoD.**
+- *Доказ:* Phase-2 DoD має G1-G10/G12/V1/V8/V9, але **G11** (single-SQLite-writer throughput у hot send-path) не верифікується ніде; G13 хоч згаданий у Phase-3 task-3 prose.
+- *Мітигація:* додати perf-DoD на G11 (Phase-3 perf-gate) або явно позначити як accepted-perf-risk.
+
+**🟠 N4. Internal-contradiction-знахідки (W13-W17) без task/DoD-власника.**
+- *Доказ:* W13 каже «G3 ⊥ G11 — вибрати один режим», але план досі тримає обидва як живі мітигації (task-5 / §G11), жодна задача не робить вибір, жоден DoD не перевіряє. Те саме W14/W16/W17 (PoP-latency-бюджет, єдине admission-rule, пропорційність auth-стеку).
+- *Мітигація:* для кожної W13-W17 — або явна задача-рішення перед Фазою 2, або свідоме accepted-decision у docs.
+
+**🟡 N1/N2. `docs/architecture.md` малює target-state як as-built.**
+- *Доказ:* `architecture.md:48-50` показує token/identity-стори + AUTHN/AUTHZ/RL-вузли, яких у `src/` НЕМАЄ (Phase-2 target); перелічує 4 адаптери, пропускає наявний `SignalEventsRpcAdapter` (W5). Версії в architecture.md коректні (SignalCli.NET 4.10.0, JDK 25; JSON-RPC.NET-версію не згадує → без 1.1/2.7-конфлікту).
+- *Мітигація:* caption «target state (Phase 2)» на auth-вузлах; додати events-адаптер або позначити Phase-3.
+
+**🟡 N5. Phase-3 DoD не верифікує V10/W10** (catch-matrix breadth + restart-cancel disambiguation); Phase-1 task-3 (health-endpoint) — без DoD-чекбоксу про наявність/відповідь.
+
+#### C-серія — клієнтський контракт MV3 / WebCrypto / WebSocket (платформні факти, які сервер-дизайн припускає неправильно)
+
+**🔴 C1. Non-extractable device-key НЕ може жити в `chrome.storage.local`; лише IndexedDB — план конфляує його з токеном.**
+- *Доказ:* `chrome.storage.local` серіалізує значення (не зберігає `CryptoKey`); non-extractable `CryptoKey` переживає термінацію ефемерного SW **лише в IndexedDB** (structured-clone тримає handle, матеріал у key-store). Storage-рядок плану коректний для **токена**, але структурно неможливий для **device-key**; «ключ просто персиститься» шляху немає.
+- *Наслідок:* якщо implementer кладе device-key у storage.local → персист падає → клієнт регенерує ключ на кожен cold-start → кожна нотіф падає PoP → сервер «lookup+PoP на кожен connect» відхиляє **легітимного** клієнта. Підриває PoP-корінь довіри (D1/D7/D8/G8) усієї Phase-2.
+- *Мітигація:* контракт мусить мандатувати «device-key у IndexedDB, enrolled pubkey стабільний через рестарти SW»; D1-enrollment визначає key-rotation-on-loss (втрачений IndexedDB = форс re-invite, не тихий re-enroll).
+
+**🟠 C2. MV3 SW: 5-хв hard-cap + kill між sign і send → at-most-once; сервер припускає недосяжну клієнтську надійність.**
+- *Доказ:* свіжо-розбуджений SW killable між `sign` і `send` (якщо event-handler повертається до резолву WS-промісу); понад 5 хв на один task — безумовна термінація. WS-активність скидає 30с-idle (Chrome 116+), але hard-cap і mid-handshake-kill лишаються.
+- *Наслідок:* «persist декремент ДО send» fail-safe для **сервера** (краш→недосил), але клієнт має дзеркальну проблему: kill між «accepted/budget decremented» і клієнтським ack → **нотіф тихо губиться** без client-retry-гарантії. Сервер припускає надійного клієнта; MV3 дає at-most-once.
+- *Мітигація:* контракт (Phase-3 task-3) — client-side idempotency: notification-queue у storage перед connect + сервер експонує idempotency-key/`messageId`, щоб re-woken SW дедуплікував ретрай, який не може відрізнити від доставленого.
+
+**🟠 C3. Реальний `Origin` MV3-SW = `chrome-extension://<id>` (НЕ `null`), id публічний → allowlist майже нічого не дає.**
+- *Доказ:* WS із extension-SW шле `Origin: chrome-extension://<extension-id>` (це довірена extension-realm, не opaque/`null`). `null` — для sandboxed-контекстів, не extension-SW. Id публічний (Web Store / unpacked manifest), нема per-install-секрету в Origin.
+- *Наслідок:* allowlist на `chrome-extension://<id>` не зупиняє нічого понад token+PoP; прийняття «or null» РОЗШИРИЛО б allowlist на кожен opaque-origin. NetCoreServer не читає Origin авто (W11) → ручний-парс-кост за майже-нульову цінність.
+- *Мітигація:* пінити allowlist на **конкретний** `chrome-extension://<id>`, прибрати гілку «or null», не продавати Origin як значущий defense-in-depth — спиратись на token+PoP.
+
+**🟠 C4. Браузер ОБРИВАЄ конект, якщо сервер не echo-ить offered субпротокол → дефолт NetCoreServer (echo-ить нічого) робить реального клієнта неконектабельним.**
+- *Доказ:* RFC 6455 §4.2.2 — клієнт, що offered субпротоколи, **fail-ить конект**, якщо сервер не вибрав жодного (або вибрав не-offered). NetCoreServer-дефолт (W11) echo-ить нічого → реальний браузерний `WebSocket([token-proto, real-proto])` **не досягає `open`**.
+- *Наслідок:* явний `SetHeader("Sec-WebSocket-Protocol", <real-non-auth>)` у `OnWsConnecting` — **connectivity-блокер**, не лише hardening. Поточний DoD (echo-leak) тестує лише negative і пропустив би сервер, що взагалі не конектиться.
+- *Мітигація:* у Phase-2 task-4 трактувати echo-real-subprotocol як обов'язкову connectivity-логіку; додати позитивний DoD «браузерний WS досягає `open` (сервер echo-нув real-субпротокол)»; ніколи не копіювати весь client-list (інакше токен у response).
+
+**🟠 C5. Phase-3 persistent-WS: `chrome.alarms` min-period 30с ≥ SW-idle-вікно → не тримає сокет, лише переустановлює (reconnect-шторм). Heartbeat мусить гнати СЕРВЕР.**
+- *Доказ:* `chrome.alarms` floor = 30с (< відхиляється); SW-idle-kill теж ~30с; alarm будить **свіжий** SW без відкритого сокета — persistent-WS помер із попереднім інстансом. WS-frame-активність тримає SW (Chrome 116+) → надійніший keep-alive = сервер шле app-heartbeat <~25с.
+- *Наслідок:* receive-дизайн Phase-3 не може спиратись на client-`chrome.alarms` (вони лише re-establish → саме той reconnect-шторм, якого план уникає).
+- *Мітигація:* контракт reconnect/backoff (Phase-3 task-3) — server-originated heartbeat-interval (<~25с, app-level JSON-RPC notification, не лише WS-ping), плюс jittered client-reconnect (G13).
+
+**🟡 C6. Chrome push wake = best-effort/throttled/coalesced → wake→connect латентність необмежена; client-coalescing ⊥ server-budget.**
+- *Доказ:* push (FCM) будить SW із `waitUntil`, але під тими ж 30с/5хв-капами (C2); доставка coalesce-абельна/drop-абельна під квотою; часті wake без UI → Chrome throttle. Push-payload ~4KB cap.
+- *Наслідок:* сервер не може припускати, що нотіфи прибувають із тією ж частотою, що емітяться події; client-coalescing (Уточнення-4) і server-budget (D2/G2) — два незалежні лімітери, не зведені; сервер бачить lossy/reordered/bursty subset.
+- *Мітигація:* idempotency/dedup (C2) + budget-облік мають це толерувати; одне-рядкова нотатка у Phase-3 task-3 про необмежену throttle-абельну wake→connect-латентність.
 
 ## Глобальний Definition of Done (для КОЖНОЇ фази)
 
