@@ -2,7 +2,7 @@
 
 ## Контекст і межі
 
-WsRpcServer — **тільки транспорт Signal-каналу** універсального модуля сповіщень. Детект подій (CREATED/UPDATED/DELETED, layer health, стрім-логи VEZHA, помилки обробки), підписки, UI, Chrome push, element — усе на боці розширення (Потужність). Цей сервер лише надійно шле в Signal та керує акаунтами/пристроями/групами.
+WsRpcServer — **генеричний WS JSON-RPC Signal-gateway** (R3.3): send + account/device/group + receive-for-codes. «Універсальний модуль сповіщень Потужності» — **один зі споживачів**, не єдиний; нижче написано з його перспективи, але сервіс consumer-agnostic. Детект подій (CREATED/UPDATED/DELETED, layer health, стрім-логи VEZHA, помилки обробки), підписки, UI, Chrome push, element — усе на боці розширення (Потужність). Цей сервер лише надійно шле в Signal та керує акаунтами/пристроями/групами.
 
 Поточний стан (станом на старт плану):
 - Ядрові RPC-методи працюють end-to-end A→B: `listAccounts`, `startLink`, `finishLink`, `sendTextMessage`.
@@ -551,11 +551,10 @@ admit(principal, account, recipient):
 1. Юзер **сам** додає бота в групу G (Signal-native, за номером бота).
 2. `requestGroupClaim(targetGroupId)` → сервер видає **one-time-код**, TTL (~10 хв), прив'язаний до **(identity U, заявлена G)**; rate-limited (як інвайти task-7).
 3. Юзер вписує код у чат G.
-4. `confirmGroupClaim()` (або короткий server-poll) → сервер робить **bounded on-demand `receive`** (drain G), сканує на pending-код.
+4. Бот **безперервно авто-ресивить** усі вхідні (R3.1) → бачить код у потоці G → матчить pending-claim.
 5. Verify: код з'явився в **заявленій** G, у межах TTL, збіг → **bind U↔G** (send-right у durable-сторі), консумувати код (one-time, атомарно).
 
-**Receive — РІШЕННЯ (обрано): bounded on-demand у Phase-2**, НЕ повний Phase-3-subscribe. Manual-mode (`--receive-mode=manual`, V2) саме для явного `receive`; claim юзає разовий drain без персистентної підписки/event-fan-out → знімає head-of-line-caveat (Уточнення-3). Group-claim + group-send стають **Phase-2-фічею**.
-- *Спайк:* звірити, що `SignalCli.NET` експонує on-demand bounded `receive` (а не лише `SignalEventService`-subscribe); якщо ні — upstream-ask до SignalCli.NET. (До спайк-набору: D6 / G7 / D16.)
+**Receive — РЕВІЗОВАНО (R3.1): безперервний авто-receive у Phase-2** (не bounded on-demand, не manual). Бот авто-ресивить усі вхідні й сканує на коди окремим non-blocking споживачем. Наслідки (head-of-line, privacy-scope, own-number) — у Рішенні власника (3) §R3.1.
 
 **Безпековий спек (пінимо):**
 - **Code-binding:** one-time + TTL + прив'язка до **(U, заявлена G)**. In-group-видимість коду — ОК: інший член не rebind-не (мапиться на U + лише на G + consumed). Залишок — **griefing** (співучасник «спалює» код → claim U падає): мітигація — bind-до-G + короткий TTL + rate-limit re-request.
@@ -570,8 +569,41 @@ admit(principal, account, recipient):
 - [ ] юзер-A claim'ить G кодом → дістає send-right у G; send проходить.
 - [ ] юзер-B (без claim) шле в G → відмова (recipient-auth, не лише account).
 - [ ] перехоплений/повторний код → відмова (one-time, bound-до-U+G); griefing-burn → re-request працює.
-- [ ] bounded receive не запускає персистентну підписку; тіла не логуються.
-- [ ] per-identity group-claim quota спрацьовує; `listGroups` скоуплений до claim'нутих груп caller'а.
+- [ ] код-сканер на авто-receive не блокує RPC-шлях (окремий споживач, R3.1); тіла не логуються.
+- [ ] per-identity group-claim quota спрацьовує; `listGroups` віддає ВИКЛЮЧНО claim'нуті/власні групи caller'а (R3.2).
+
+### Рішення власника (3) — 4 уточнення моделі (2026-06-25)
+
+**R3.1 — Receive: безперервний авто-receive (СКАСОВУЄ bounded-on-demand + V2-manual-передумову).**
+- *Зміна:* бот **автоматично ресивить ВСІ повідомлення** (persistent receive), сканує на claim-коди; знайшов код → асайн групи до identity-видавця. `UseManualReceiveMode=false` / on-start, НЕ manual.
+- *Скасовує:* «bounded on-demand receive у Phase-2» (group-claim) і V2-тезу «manual = дефолт, send-only з коробки». **Phase-1 task-7 інвертується:** не «no-op», а **увімкнути авто-receive**.
+- *Наслідки (рев'ю-дисципліна):*
+  - **Уточнення-3 head-of-line ТЕПЕР АКТУАЛЬНИЙ:** один stdout-loop + notification-channel `Wait` → повільний код-сканер блокує й RPC-відповіді. → **окремий non-blocking споживач + drop-policy** для сканера (не на гарячому RPC-шляху). Phase-2-робота тепер, не Phase-3-caveat.
+  - **Privacy-експозиція ↑↑:** бот бачить КОЖНЕ вхідне (усі групи, усі DM). Скан-і-викинь; тіла/номери/вкладення **ніколи** не логувати/зберігати (W6/A2 під ще більшим навантаженням).
+  - **Own-number scope (нова межа):** daemon multi-account on-start ресивить і за **лінковані власні номери** → сервер обробляє особистий вхідний трафік юзера. Прийнятно self-host; для shared-host — **нова privacy-межа**, зафіксувати в `shared-bot.md`. (Заодно: **G7 stale-listGroups стає moot** — sync приходить через receive.)
+  - **Анти-бан:** receive — нормальна клієнтська поведінка (сам по собі ризик не підвищує); ризик — у footprint/обсязі.
+- *Власник:* Phase-1 task-7 (інвертувати на авто-receive) + Phase-2 group-claim task (сканер = окремий споживач). Phase-3 subscribe/event-RPC-surface лишається опційним (це лише RPC-експозиція подій, не сам receive-loop).
+
+**R3.2 — listGroups віддає ВИКЛЮЧНО групи користувача (жорстке правило, повністю закриває G9).**
+- *Зміна:* `listGroups` НІКОЛИ не повертає не-claim'нуті групи; лише асайнуті caller'у (own-number + claim'нуті кодом). Outbound-фільтр — hard default-deny, не «admin-only АБО accepted-risk».
+- *Закриває:* **G9** повністю; **W22** (fail-closed фільтр) критичний саме тут — виняток у фільтрі → empty, ніколи raw.
+- *Власник:* Phase-2 task-1 (`FilterReadOutputAsync`). DoD: «listGroups A → лише групи A; нічого чужого навіть на спільному боті».
+
+**R3.3 — Сервіс consumer-agnostic; Потужність — один зі споживачів (де-coupling).**
+- *Зміна:* розробляємо **генеричний WS JSON-RPC Signal-gateway** (send + account/device/group + receive-for-codes); «модуль сповіщень Потужності» — **один споживач** із можливих багатьох. Узгоджується з CLAUDE.md («any language that speaks WebSocket + JSON-RPC»).
+- *Наслідок для знахідок:* **C1-C6 (MV3-специфіка)** = контракт ОДНОГО споживача (Потужність-розширення), НЕ вимоги сервісу. **Серверні половини лишаються генеричними й обов'язковими:** `apiVersion`-handshake (A5), subprotocol-token auth, **idempotency-key/`messageId`** (C2-серверна), **server-heartbeat** опція (C5-серверна), error-codes, echo субпротоколу (C4). HOW консьюмер це задовольняє (IndexedDB-ключ C1, chrome.alarms C5, MV3-lifecycle C2) — **consumer-side**, у його репо/доках.
+- *Наслідок для меж:* детект подій (CREATED/UPDATED, VEZHA) — домен Потужності, не сервісу. Docs: `docs/` описують **генеричний контракт**; Потужність-specifics — як приклад споживача.
+- *Власник:* doc-рефрейм (Phase-1 task-6 `self-host.md` + Phase-3 API-reference) — генеричний контракт; C1-C6 перенести в «consumer-contract (приклад: Потужність-MV3)».
+
+**R3.4 — Усі сертифікати (вкл. CA) авто-генеруються на старті, якщо не вказані явно (знімає D3-toil, не D3-trust).**
+- *Зміна:* нема явно сконфігурованих cert/CA → сервер **генерує на старті**: self-signed CA + server-cert (wss) + CA, що підписує client-cert для mTLS node/admin. Zero-config TLS для self-host.
+- *Persist-once (критично):* генерувати **лише якщо відсутні**; персистити на LUKS (CA-private `0600`); **переюзати** на наступних стартах — інакше fresh CA щоразу зламає весь client-trust. «якщо не вказані явно» = generated теж персистяться.
+- *Наслідки:*
+  - **D3-toil знято** (сервер сам робить CA/cert), але **D3-trust лишається:** self-signed → браузерний `wss` з extension'у впаде, доки консьюмер не додасть root у trust-store. Авто-ген прибирає серверну рутину, не клієнтську довіру — зафіксувати в `self-host.md`.
+  - **D4-fail-closed:** TLS тепер завжди доступний → менше шансів no-TLS на публічному біндингу; startup-assertion однаково перевіряє, що TLS активний перед non-loopback.
+  - **mTLS:** авто-CA = trust-root node-to-node/admin (framework CustomRootTrust); extension — НЕ mTLS (subprotocol-token), лише довіряє server-cert.
+  - **Renewal:** авто-cert має expiry → на старті renew, якщо прострочений/близько; CA — довший термін.
+- *Власник:* Phase-2 task-9 + `Program.cs` startup. DoD: «чистий старт без cert-конфігу → робочий wss + персистований CA; рестарт переюзає той самий CA (client-trust не ламається)».
 
 ## Глобальний Definition of Done (для КОЖНОЇ фази)
 
