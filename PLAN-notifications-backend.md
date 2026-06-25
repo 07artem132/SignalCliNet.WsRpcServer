@@ -543,6 +543,36 @@ admit(principal, account, recipient):
 
 **Залишковий зв'язок:** A1-доку-фікс (`conventions.md`) приєднується до N7 (README JDK) як батч doc-fix; D16+W9-спайк — до спайк-набору (D6 handshake / G7 own-number-listGroups).
 
+### Нова капабіліті — group-claim через in-chat-код (рішення 2026-06-25)
+
+**Призначення:** per-group recipient-authorization для спільного бота. Юзер доводить доступ до групи, вписавши виданий код у чат → дістає право слати в ЦЮ групу через бота. **Апгрейд W17 для груп:** авторизація на рівні **(identity, group)**, а не лише account → знімає «бот = відкрите реле» для груп-таргету (для прямих E.164 W17-residual лишається). Змінює правило bot-моделі: `sendTextMessage` у **групу** через спільний бот тепер гейтиться claim'ом, не лише account-guard'ом.
+
+**Потік:**
+1. Юзер **сам** додає бота в групу G (Signal-native, за номером бота).
+2. `requestGroupClaim(targetGroupId)` → сервер видає **one-time-код**, TTL (~10 хв), прив'язаний до **(identity U, заявлена G)**; rate-limited (як інвайти task-7).
+3. Юзер вписує код у чат G.
+4. `confirmGroupClaim()` (або короткий server-poll) → сервер робить **bounded on-demand `receive`** (drain G), сканує на pending-код.
+5. Verify: код з'явився в **заявленій** G, у межах TTL, збіг → **bind U↔G** (send-right у durable-сторі), консумувати код (one-time, атомарно).
+
+**Receive — РІШЕННЯ (обрано): bounded on-demand у Phase-2**, НЕ повний Phase-3-subscribe. Manual-mode (`--receive-mode=manual`, V2) саме для явного `receive`; claim юзає разовий drain без персистентної підписки/event-fan-out → знімає head-of-line-caveat (Уточнення-3). Group-claim + group-send стають **Phase-2-фічею**.
+- *Спайк:* звірити, що `SignalCli.NET` експонує on-demand bounded `receive` (а не лише `SignalEventService`-subscribe); якщо ні — upstream-ask до SignalCli.NET. (До спайк-набору: D6 / G7 / D16.)
+
+**Безпековий спек (пінимо):**
+- **Code-binding:** one-time + TTL + прив'язка до **(U, заявлена G)**. In-group-видимість коду — ОК: інший член не rebind-не (мапиться на U + лише на G + consumed). Залишок — **griefing** (співучасник «спалює» код → claim U падає): мітигація — bind-до-G + короткий TTL + rate-limit re-request.
+- **Атомарний consume-and-bind:** `UPDATE…SET consumed=1 WHERE code=? AND consumed=0` + rows-affected ПЕРЕД bind (патерн W20/finishLink); паралельні confirm не подвоюють bind.
+- **Footprint / анти-бан (D2):** per-identity **quota на group-claims** (бот не розростається безмежно); abuse-log claim'ів; бот у багатьох групах = receive-навантаження + privacy-експозиція.
+- **Privacy під час receive:** скануємо лише pending-коди; тіла/номери/вкладення **не логувати/не зберігати** (privacy-контракт + W6/A2).
+- **Рівень авторизації:** «член може слати в групи, де він є» (будь-який член може додати бота) — НЕ admin-only; зафіксувати в `shared-bot.md`.
+- **Revocation:** binding падає при revoke identity (каскад); якщо бота прибрали з G — send фейлиться (Signal відмовляє); опційний admin-revoke binding'у.
+- **G9-зв'язок:** `listGroups` тепер скоупити до **claim'нутих** груп caller'а (замість admin-only) — частково закриває cross-tenant leak.
+
+**Власник:** нова Phase-2 task (group-claim) між task-6 (link-session) і task-7 (інвайти) — той самий one-time/TTL/atomic-consume/rate-limit апарат. Нові RPC `requestGroupClaim`/`confirmGroupClaim` — через chokepoint (токен потрібен; recipient-proof = сам claim). Код — секрет → `[JsonIgnore]` + source-gen DTO (A1). DoD:
+- [ ] юзер-A claim'ить G кодом → дістає send-right у G; send проходить.
+- [ ] юзер-B (без claim) шле в G → відмова (recipient-auth, не лише account).
+- [ ] перехоплений/повторний код → відмова (one-time, bound-до-U+G); griefing-burn → re-request працює.
+- [ ] bounded receive не запускає персистентну підписку; тіла не логуються.
+- [ ] per-identity group-claim quota спрацьовує; `listGroups` скоуплений до claim'нутих груп caller'а.
+
 ## Глобальний Definition of Done (для КОЖНОЇ фази)
 
 Фаза не закрита, поки не виконані всі три умови:
