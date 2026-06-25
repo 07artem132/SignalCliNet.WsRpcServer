@@ -448,6 +448,24 @@ WsRpcServer — **тільки транспорт Signal-каналу** унів
 - *Доказ:* `sendTextMessage(account,recipients,message)` (`ISignalMessageRpc`, adapter `:19-24`) сьогодні викликається будь-яким клієнтом без auth. Phase-2 додає обов'язковий subprotocol-токен на upgrade (плейнтекст-клієнт ламається на handshake) + PoP (непідписані ламаються) + principal-фільтр на `listAccounts`/`listGroups` (та сама назва, **інший result-set** — тихий behavioral-break) + default-deny `-32601` на неенумерований метод. **Нема** method-version/`apiVersion`-handshake/capability-negotiation/deprecation-window. Розширення — окремий деплой (план це каже) → Phase-1→2 апгрейд сервера = flag-day для кожного розгорнутого розширення.
 - *Мітигація:* увести `apiVersion`/capability-negotiation у handshake АБО transition-вікно (приймати і authed, і unauthed тимчасово) + узгодити реліз сервера з релізом розширення; зафіксувати у contract-докс (Phase-3 task-3).
 
+### Звірка-7 — Прохід 5 (фінальний): seam-аудит app-side vs upstream + конвергенс (2026-06-25)
+
+Прохід 5: (а) адверс. верифікація A3/A4/A5 — **усі вистояли**, нових немає; внутрішня консистентність серій W/N/C/A — чиста (жодна спростована знахідка W1/W12/W18/N6/N8 не цитується деінде як живий блокер; C4⊕W11 узгоджені; єдина невирішена суперечність W13/G3⊥G11 уже сама прапорена планом). (б) seam-аудит: чи net-new механізми реально робляться app-side, чи приховано вимагають upstream-зміни (порушення critical-rule #1 «це glue, фіксь upstream, не тут»).
+
+**🟠 U1. Frame-accumulation DoS-тріада — структурно НЕ app-side І НЕ фікситься bump'ом JSON-RPC.NET (єдиний механізм, де принцип «це glue» ламається).**
+- *Доказ:* `OnWsReceived(buffer, offset, size)` (`SignalRpcSession.cs:210,221`) отримує **вже зібране** повідомлення — NetCoreServer буферить усі continuation-фрейми у внутрішньому `WsBuffer` до виклику консьюмера; seam'у нижче `OnWsReceived` (abort під час накопичення) **немає**. `WebSocketMessageHandler` теж бачить лише post-assembly байти. Тобто: (а) апка не може (нема seam'у); (б) JSON-RPC.NET не може додати seam без власного форку NetCoreServer's frame-loop; (в) реальний фікс — у **NetCoreServer** (second-order upstream, якого rule-1 навіть не називає). План мітить frame-assembly-abort / max-frame-count / assembly-timeout (slowloris) як «повністю net-new app work» (msg-row, W7), але вони **нерозкладні як app-задача** і **невиправні bump'ом**.
+- *Підсилення:* chokepoint живе на dispatch-шарі (`JsonRpc.DispatchRequestAsync`, app-reachable), а frame-DoS-захист мусить бути **нижче** `OnWsReceived` (pre-parse, NetCoreServer-internal). Атака OOM гігантським multi-frame-повідомленням **обходить chokepoint** (він не запускається — процес падає під час reassembly до dispatch'у). Це єдиний DoS-клас, який апка архітектурно НЕ може захистити.
+- *Мітигація:* пере-тегнути ці пункти з «Phase-2/3 net-new app work» на **accepted-risk + зовнішній L4-контроль (вфолдити у D5)** — план уже має цей словник для сусіднього D5; АБО запланувати явну NetCoreServer-upstream-контрибуцію. Перестати нести як in-repo app-задачі.
+- *Конвергенс-нотатка:* решта **6/7** net-new механізмів (chokepoint via app-конструйований `AuthorizingJsonRpc`/`JsonRpc`-subclass; per-IP cap via override `OnConnected(TcpSession)` + `Socket.RemoteEndPoint`; auth-timeout; idle-timeout via app-owned `OnWsReceived`; server-wide in-flight semaphore G6 via decorator над `ISignalCliClient`; PoP/handshake-reject via `OnWsConnecting`) — **APP-SIDE-OK** на наявних virtual-seam'ах (апка субкласить server+session і сама конструює `JsonRpc`). Принцип «це glue» тримається для них; план місцями over-worry-ить (per-IP/idle-timeout реально app-side). Rule-1 порушується ЛИШЕ frame-тріадою.
+
+#### Статус ревю (підсумок 5 проходів)
+
+Темп нових знахідок по проходах: **Прохід-1/2 ~25 (W1-W25) → Прохід-3 ~16 (N1-N10, C1-C6) → Прохід-4 5 (A1-A5) → Прохід-5 1 (U1)**; верифікаційний агент Проходу-5 нових не дав, внутрішня консистентність чиста. **Конвергенція досягнута** (cap=5 проходів).
+
+- **Спростовано/знижено за час ревю (адверсаріальна само-перевірка):** W1, W12 — **спростовані** (NU1603 floor-resolution; send-response error-path); W18, N6 — **знижені** 🔴→🟠. Це показує, що сам пайплайн ревю ловить власні false-positive.
+- **Невирішені план-внутрішні рішення для власника (не код-баги, а вибори):** W13 (G3⊥G11 — обрати режим), W14/W16/W17 (PoP-latency-бюджет / єдине admission-rule / пропорційність auth-стеку), U1-тегування (accepted-risk vs upstream-контриб), N3/N4 (DoD-власники для G11 та W13-W17).
+- **Keystone-знахідки, що тримаються:** A1/A2 (serializer reflection-fallback воїдить «реєструй кожен DTO»; ConsoleTraceListener param-firehose сьогодні) 🔴; C1 (device-key мусить бути IndexedDB) 🔴; W13/W20 🔴; W4 (обсяг task-0) 🔴.
+
 ## Глобальний Definition of Done (для КОЖНОЇ фази)
 
 Фаза не закрита, поки не виконані всі три умови:
