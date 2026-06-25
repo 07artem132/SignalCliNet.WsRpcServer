@@ -1,4 +1,3 @@
-﻿using System.Diagnostics;
 using System.Net.WebSockets;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -100,14 +99,10 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
             // Configure JSON-RPC
             JsonRpc.CancelLocallyInvokedMethodsWhenConnectionIsClosed = true;
 
-            // Configure tracing for debugging
-            var jsonRpcTraceSource = new TraceSource("StreamJsonRpc")
-            {
-                Switch = { Level = SourceLevels.Information }
-            };
-            jsonRpcTraceSource.Listeners.Add(new ConsoleTraceListener());
-            JsonRpc.TraceSource = jsonRpcTraceSource;
-            JsonRpc.ActivityTracingStrategy = new ActivityTracingStrategy();
+            // ВАЖЛИВО (privacy, CLAUDE rule #4): НЕ вмикати ConsoleTraceListener на TraceSource —
+            // StreamJsonRpc на рівні Information трейсить повні тіла RPC (включно з params/номерами/
+            // майбутніми токенами) у консоль (= docker logs). Діагностику вмикати лише вибірково
+            // через структуроване логування, не цей firehose.
 
             // Register RPC methods
             RegisterRpcMethods(JsonRpc);

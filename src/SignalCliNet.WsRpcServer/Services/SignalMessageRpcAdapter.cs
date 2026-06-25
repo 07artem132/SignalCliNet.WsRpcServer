@@ -22,7 +22,8 @@ public class SignalMessageRpcAdapter(ISignalMessage signalMessage, ILogger<Signa
         string message,
         CancellationToken cancellationToken = default)
     {
-        _logger.LogInformation("RPC: Request to send text message from account {Account}", account);
+        // privacy (CLAUDE rule #4): не логувати account(=E.164) — лише факт виклику
+        _logger.LogInformation("RPC: Request to send text message");
 
         if (string.IsNullOrWhiteSpace(account))
             throw new RpcErrorException(JsonRpcErrorCode.InvalidParams, "Account cannot be empty");
