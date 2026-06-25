@@ -40,11 +40,16 @@ jobs:
           dotnet-version: 10.0.x
 
       # --- FAST path: автентифікований GitHub Packages feed (джерело `github` уже в NuGet.Config) ---
+      # Переважно PAT власника (secrets.NUGET_READ_TOKEN, read:packages) — читає пакети з усіх
+      # репо власника без per-repo grant'ів. Якщо секрета нема — fallback на вбудований GITHUB_TOKEN
+      # (працює лише якщо sibling-пакети надали доступ цьому репо; інакше спрацює sibling-build нижче).
       - name: Authenticate GitHub Packages feed
+        env:
+          NUGET_TOKEN: ${{ secrets.NUGET_READ_TOKEN || secrets.GITHUB_TOKEN }}
         run: >
           dotnet nuget update source github
-          --username ${{ github.actor }}
-          --password ${{ secrets.GITHUB_TOKEN }}
+          --username ${{ github.repository_owner }}
+          --password "$NUGET_TOKEN"
           --store-password-in-clear-text
           --configfile NuGet.Config
 
