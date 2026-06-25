@@ -34,6 +34,7 @@ public static class SignalRpcExtensions
         services.AddScoped<ISignalAccountsRpc, SignalAccountsRpcAdapter>();
         services.AddScoped<ISignalDevicesRpc, SignalDevicesRpcAdapter>();
         services.AddScoped<ISignalMessageRpc, SignalMessageRpcAdapter>();
+        services.AddScoped<ISignalGroupsRpc, SignalGroupsRpcAdapter>();
 
         // Server hosted service
         services.AddHostedService<SignalRpcHostedService>();

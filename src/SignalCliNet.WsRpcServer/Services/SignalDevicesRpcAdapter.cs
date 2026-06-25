@@ -21,7 +21,7 @@ public class SignalDevicesRpcAdapter(ISignalDevices signalDevices, ILogger<Signa
         _logger.LogInformation("RPC: Request to start device linking");
         try
         {
-            return await _signalDevices.StartLinkAsync(cancellationToken);
+            return await _signalDevices.StartLinkAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -34,9 +34,22 @@ public class SignalDevicesRpcAdapter(ISignalDevices signalDevices, ILogger<Signa
         CancellationToken cancellationToken = default)
     {
         _logger.LogInformation("RPC: Request to finish device linking");
+
+        // Валідація на межі RPC: порожній URI/ім'я → InvalidParams, не InvocationError від демона
+        if (string.IsNullOrWhiteSpace(deviceLinkUri))
+            throw new RpcErrorException(JsonRpcErrorCode.InvalidParams, "deviceLinkUri cannot be empty");
+
+        if (string.IsNullOrWhiteSpace(deviceName))
+            throw new RpcErrorException(JsonRpcErrorCode.InvalidParams, "deviceName cannot be empty");
+
         try
         {
-            return await _signalDevices.FinishLinkAsync(deviceLinkUri, deviceName, cancellationToken);
+            return await _signalDevices.FinishLinkAsync(deviceLinkUri, deviceName, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (RpcErrorException)
+        {
+            throw;
         }
         catch (Exception ex)
         {

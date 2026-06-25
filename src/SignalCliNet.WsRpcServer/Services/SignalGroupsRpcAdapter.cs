@@ -25,7 +25,7 @@ public class SignalGroupsRpcAdapter(ISignalGroups signalGroups, ILogger<SignalGr
 
         try
         {
-            return await _signalGroups.ListGroupsAsync(account, cancellationToken);
+            return await _signalGroups.ListGroupsAsync(account, cancellationToken).ConfigureAwait(false);
         }
         catch (RpcErrorException)
         {
