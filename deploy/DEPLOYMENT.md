@@ -38,7 +38,7 @@ Signal, відкрити доступ з інтернету через `wss://` 
 приватний — потрібен GitHub-токен зі скоупом `read:packages`.
 
 > 📦 **Передумова:** пакети потрібних версій (`SignalCli.NET 4.10.0`,
-> `JSON-RPC.NET 1.1.0`, `SignalCli.Runtime 0.14.3.1`) мають бути опубліковані у
+> `JSON-RPC.NET 2.7.0`, `SignalCli.Runtime 0.14.3.1`) мають бути опубліковані у
 > feed. Публікація — workflow `publish-nuget.yml` у кожному репо
 > (`Actions → Publish NuGet → Run workflow`, або автоматично при релізі).
 

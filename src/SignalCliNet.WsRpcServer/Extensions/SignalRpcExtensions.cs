@@ -1,6 +1,8 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
+using SignalCli.Models.Signal.Events;
 using SignalCliNet.WsRpcServer.Events;
 using SignalCliNet.WsRpcServer.Interfaces;
+using SignalCliNet.WsRpcServer.Model;
 using SignalCliNet.WsRpcServer.Services;
 using SignalCliNet.WsRpcServer.Subscriptions;
 using WsRpcServer.Core;
@@ -26,7 +28,7 @@ public static class SignalRpcExtensions
         services.AddJsonRpcCore(configureOptions);
 
         // Override core services with Signal-specific implementations
-        services.AddSingleton<ISubscriptionManager, SubscriptionManager>();
+        services.AddSingleton<ISubscriptionManager<SignalEventTypes, BaseSignalEventArgs>, SubscriptionManager>();
         services.AddSingleton<IEventProcessor, EventProcessor>();
         services.AddSingleton<IRpcServiceRegistry, RpcServiceRegistry>();
 

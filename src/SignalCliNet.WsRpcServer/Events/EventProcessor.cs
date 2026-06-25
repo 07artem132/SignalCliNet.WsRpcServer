@@ -15,11 +15,11 @@ namespace SignalCliNet.WsRpcServer.Events;
 public class EventProcessor : AbstractEventProcessor
 {
     private readonly ISignalEventService _eventService;
-    private readonly ISubscriptionManager _subscriptionManager;
+    private readonly ISubscriptionManager<SignalEventTypes, BaseSignalEventArgs> _subscriptionManager;
 
     public EventProcessor(
         ISignalEventService eventService,
-        ISubscriptionManager subscriptionManager,
+        ISubscriptionManager<SignalEventTypes, BaseSignalEventArgs> subscriptionManager,
         ILogger<EventProcessor> logger)
         : base(logger)
     {
@@ -68,8 +68,8 @@ public class EventProcessor : AbstractEventProcessor
             var eventType = eventInfo.EventType;
             var methodName = eventInfo.MethodName;
 
-            Logger.LogDebug("Processing event of type {EventType} from account {Account}",
-                typeof(T).Name, eventArgs.Account ?? string.Empty);
+            // privacy (CLAUDE rule #4): не логувати account(=E.164)
+            Logger.LogDebug("Processing event of type {EventType}", typeof(T).Name);
 
             // Get clients for the event
             var clientIds = _subscriptionManager.GetClientsForEvent(eventArgs, eventType);

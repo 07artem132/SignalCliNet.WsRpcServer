@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.Logging;
+using SignalCli.Models.Signal.Events;
 using SignalCliNet.WsRpcServer.Interfaces;
 using SignalCliNet.WsRpcServer.Model;
 using StreamJsonRpc.Protocol;
@@ -8,12 +9,12 @@ using WsRpcServer.Exceptions;
 namespace SignalCliNet.WsRpcServer.Services;
 
 public class SignalEventsRpcAdapter(
-    ISubscriptionManager subscriptionManager,
+    ISubscriptionManager<SignalEventTypes, BaseSignalEventArgs> subscriptionManager,
     ILogger<SignalEventsRpcAdapter> logger,
     Guid clientId)
     : ISignalEventsRpc
 {
-    private readonly ISubscriptionManager _subscriptionManager =
+    private readonly ISubscriptionManager<SignalEventTypes, BaseSignalEventArgs> _subscriptionManager =
         subscriptionManager ?? throw new ArgumentNullException(nameof(subscriptionManager));
 
     private readonly ILogger<SignalEventsRpcAdapter>
@@ -22,11 +23,13 @@ public class SignalEventsRpcAdapter(
     public async Task<int> Subscribe(string account, SignalEventTypes eventTypes,
         CancellationToken cancellationToken = default)
     {
-        _logger.LogInformation("RPC: Client {ClientId} requesting subscription to {EventTypes} for account {Account}",
-            clientId, eventTypes, account);
+        // privacy (CLAUDE rule #4): не логувати account(=E.164)
+        _logger.LogInformation("RPC: Client {ClientId} requesting subscription to {EventTypes}",
+            clientId, eventTypes);
         try
         {
-            return await _subscriptionManager.Subscribe(clientId, account, eventTypes, cancellationToken);
+            // JSON-RPC.NET 2.x: менеджер бере колекцію типів подій; WS-контракт лишається одним [Flags]-значенням
+            return await _subscriptionManager.Subscribe(clientId, account, new[] { eventTypes }, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -59,7 +62,7 @@ public class SignalEventsRpcAdapter(
 
         try
         {
-            return await _subscriptionManager.UpdateSubscription(clientId, subscriptionId, eventTypes,
+            return await _subscriptionManager.UpdateSubscription(clientId, subscriptionId, new[] { eventTypes },
                 cancellationToken);
         }
         catch (Exception ex)
