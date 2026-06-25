@@ -43,7 +43,7 @@ public class SignalMessageRpcAdapter(ISignalMessage signalMessage, ILogger<Signa
                     message ?? string.Empty)
                 .Build();
 
-            return await _signalMessage.SendTextMessageAsync(options, cancellationToken);
+            return await _signalMessage.SendTextMessageAsync(options, cancellationToken).ConfigureAwait(false);
         }
         catch (RpcErrorException)
         {
