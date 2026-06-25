@@ -1,9 +1,13 @@
 name: CI
 
 # Build + test gate для SignalCliNet.WsRpcServer.
-# Особливість цього репо: три upstream-пакети (SignalCli.NET, JSON-RPC.NET, SignalCli.Runtime)
-# живуть у ПРИВАТНОМУ GitHub Packages feed (NuGet.Config packageSourceMapping), тож restore
-# вимагає автентифікації токеном із read:packages.
+#
+# Три upstream-пакети (SignalCli.NET, JSON-RPC.NET, SignalCli.Runtime) лежать у GitHub
+# Packages NuGet-реєстрі. Важливо: реєстр GitHub Packages для NuGet вимагає автентифікації
+# навіть для пакетів із ПУБЛІЧНИХ репо (анонімний restore → 401). Тому два шляхи:
+#   1) FAST: автентифікований restore через авто GITHUB_TOKEN (packages: read).
+#   2) FALLBACK (якщо немає доступу до пакетів): зібрати sibling-source у локальний feed —
+#      нуль зовнішніх токенів, повністю self-contained (качає signal-cli + JDK payload).
 on:
   push:
     branches: [main, "claude/**"]
@@ -35,7 +39,7 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      # Автентифікуємо приватний GitHub Packages feed (джерело `github` уже є в NuGet.Config).
+      # --- FAST path: автентифікований GitHub Packages feed (джерело `github` уже в NuGet.Config) ---
       - name: Authenticate GitHub Packages feed
         run: >
           dotnet nuget update source github
@@ -44,10 +48,37 @@ jobs:
           --store-password-in-clear-text
           --configfile NuGet.Config
 
-      - name: Restore
+      - name: Restore (GitHub Packages)
+        id: restore_ghp
+        continue-on-error: true
         run: dotnet restore SignalCliNet.WsRpcServer.sln
 
-      # Явний gate вразливостей: `dotnet list --vulnerable` завжди exit 0, тож грепаємо вивід.
+      # --- FALLBACK: build sibling-source у локальний feed (лише якщо FAST restore не вдався) ---
+      - name: Checkout JSON-RPC.NET (fallback)
+        if: steps.restore_ghp.outcome == 'failure'
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          repository: 07artem132/json-rpc.net
+          path: _deps/JSON-RPC.NET
+
+      - name: Checkout SignalCli.NET (fallback)
+        if: steps.restore_ghp.outcome == 'failure'
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          repository: 07artem132/signalcli.net
+          path: _deps/SignalCli.NET
+
+      - name: Build local feed + restore (fallback)
+        if: steps.restore_ghp.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          JSONRPC_REPO="$PWD/_deps/JSON-RPC.NET" \
+          SIGNALCLI_REPO="$PWD/_deps/SignalCli.NET" \
+            bash deploy/build-local-feed.sh "$PWD/.localfeed"
+          dotnet restore SignalCliNet.WsRpcServer.sln \
+            --configfile deploy/nuget.ci-localfeed.config -p:NuGetAudit=false
+
+      # --- Build + test (обидва шляхи сходяться сюди; пакети вже restore'нуті) ---
       - name: NuGet vulnerability audit gate
         run: |
           set -euo pipefail
