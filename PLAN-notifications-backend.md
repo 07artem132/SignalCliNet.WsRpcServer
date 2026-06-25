@@ -634,6 +634,17 @@ admit(principal, account, recipient):
 - **Нескоротні людські входи (інакше — реальне зниження):** (a) реєстрація Signal-акаунта (номер; не авто-реєструється — SMS/captcha); (b) build-token раз; (c) **encrypted-volume МУСИТЬ бути ON** (пропустити заради автоматизації = ОСЬ це зниження); (d) one-time retrieval admin-токена (prod; e2e читає сам).
 - *Власник:* `deploy/Dockerfile*`+compose (Phase-1 task-2/5), `Program.cs` startup (auto-gen+persist), Phase-2 task-9 (supersede LUKS-framing на encrypted-volume). DoD: «чистий `docker compose up` БЕЗ секрет-env → робочий wss + згенеровані CA/пеппери/admin-token на encrypted-томі; рестарт переюзає; e2e-harness читає їх із тому й ганяє матрицю; нуль секретів у env/logs/шарах образу».
 
+### Рішення власника (3.8) — Адміністрування: admin = mTLS-консьюмер, клієнт CLI-first (2026-06-25)
+
+**Принцип:** адмін — це **ще один споживач** того самого WS JSON-RPC контракту (R3.3) з `role=admin`; жодного окремого admin-протоколу — ті самі методи через той самий chokepoint, лише admin-політика їх пропускає.
+
+- **Auth — mTLS client-cert (НЕ token/PoP):** адмін автентифікується **mTLS client-cert**, виданим **авто-ген CA сервера (R3.4)** на bootstrap → `NodeIdentity` → `ClaimsPrincipal` `role=admin`. Це фреймворковий `secure-transport-mtls` (2.6.0) + authz (2.7.0) — **здебільшого вже є** після task-0 bump'у; бспоук token/PoP-стек адміну НЕ потрібен (token+PoP — лише для браузерного розширення, що client-cert не вміє). Cred (cert+key) — в **OS-keystore** (DPAPI/keychain/libsecret), не IndexedDB (то браузерний кейс C1).
+- **Admin RPC-поверхня (Phase-2):** `listAccounts(all)` (R3.6) · identities (list / promote→admin / revoke-каскад) · invites (видати / статус / per-code cap, task-7) · group-claims + abuse-log нагляд · audit-trail (task-11) · bot device/destructive ops (за `EnableDestructiveOperations`) · health/budgets (Phase-3). Усі — через chokepoint, admin-політика; не-admin principal на admin-метод → `-32001`.
+- **Клієнт — РІШЕННЯ: CLI-first.** admin-CLI (scriptable: enrollment cert на bootstrap, видача інвайтів, revoke, audit-dump) — лягає на bootstrap-файл (G5) + R3.7-автоматизацію (CI/headless). GUI — **Avalonia** (крос-платформ XAML/MVVM, бо сервер Linux/Docker), опційно пізніше; **НЕ WPF** (Windows-lock). Клієнт — окремий консьюмер (R3.3), поза 3 server-репо; reference-CLI може жити в `example/`.
+- **Bootstrap:** перший старт генерує admin client-cert (або CSR-flow) у `0600`-файл/keystore (G5 — не stdout/logs); ідемпотентно (D14/task-8). Admin-cert має власний lifecycle/revoke (CA CRL або стор).
+- **Transport hardening (опційно):** admin-listener може бути mTLS-only та/або окремий порт/loopback (high-privilege; аналогічно метрикам D13).
+- *Власник:* Phase-2 task-8 (admin bootstrap → cert) + task-1 (admin RPC-поверхня через chokepoint, role-conditional). DoD: «admin автентифікується mTLS-cert від CA сервера → role=admin; admin-CLI робить bootstrap/invite/revoke/audit-dump; не-admin cert/токен на admin-метод → -32001».
+
 ## Глобальний Definition of Done (для КОЖНОЇ фази)
 
 Фаза не закрита, поки не виконані всі три умови:
