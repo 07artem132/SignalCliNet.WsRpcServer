@@ -620,6 +620,19 @@ admit(principal, account, recipient):
   - **listGroups:** уточнення стосувалось лише «лінк-акаунтів» → admin-listGroups-scope НЕ розширюю автоматично (groups лишаються per-claim/own — G9/R3.2); потрібен admin-перегляд усіх груп — окреме рішення.
 - *Власник:* Phase-2 task-1 (role-conditional outbound filter) + task-8 (admin bootstrap/role) + task-11 (audit). DoD: «admin `listAccounts` → усі лінк-акаунти; user → лише own+shared; admin all-accounts read у audit-trail; admin НЕ шле через чужий приватний акаунт без явної audited-операції».
 
+### Рішення власника (3.7) — Docker deploy/e2e: максимум автоматизації без зниження безпеки (2026-06-25)
+
+**Принцип:** зсув від «апка кастодить секрети» до «платформа шифрує том + апка auto-gen+persist секрети на ньому». Автоматизація і безпека тут НЕ конфліктують — підхід ще й підвищує безпеку.
+
+- **At-rest = ПЛАТФОРМНИЙ encrypted volume, НЕ app-LUKS у контейнері.** LUKS/dm-crypt усередині контейнера потребує `--privileged`/`CAP_SYS_ADMIN` = **гірша** безпека. Натомість: cloud KMS-keyed disk (encrypted EBS/PD) або host dm-crypt; контейнер пише в змонтований том, шифр прозорий, ключ — у платформи/KMS, апка його **не торкається**. Апка: `0700` + писати секрети ЛИШЕ на цей том. **Замінює** «LUKS-том»-формулювання D-секції/task-9 на «encrypted volume (платформа/host), app-agnostic до ключа».
+- **Auto-gen+persist-once на томі:** TLS/CA (R3.4) + **пеппери (`pepper_token`/`pepper_abuse`)** — CSPRNG на first-boot, persist на encrypted-том, НІКОЛИ в env/logs. Безпечніше за env-provisioning (env тече через `/proc`, `docker inspect`, crash-dump — D17/G5). Знімає peppers як деплой-блокер.
+- **Build-secret:** BuildKit `--secret id=ghtoken` (read:packages) — не потрапляє в шари образу; або task-0 bump + sibling-build офлайн.
+- **Admin-token:** `0600`-файл на томі; prod — `docker exec/cp` один раз; e2e — harness читає з тому. Ніколи stdout/logs (G5).
+- **Single-instance:** lockfile + `replicas=1` (compose no-scale / k8s `Recreate`, G1).
+- **e2e specifics:** harness монтує test-account-secret → піднімає контейнер → читає **згенеровані** CA+admin-token з тому → ганяє матрицю проти **реального** bootstrap-шляху. **БЕЗ** test-only fixed-pepper / no-auth-флага (D4 backdoor-ризик) — тест читає згенероване → **`test == prod` code-path**. Це і є «без зниження безпеки». Єдиний інжектований секрет = `SIGNALCLI_TEST_ACCOUNT` (номер).
+- **Нескоротні людські входи (інакше — реальне зниження):** (a) реєстрація Signal-акаунта (номер; не авто-реєструється — SMS/captcha); (b) build-token раз; (c) **encrypted-volume МУСИТЬ бути ON** (пропустити заради автоматизації = ОСЬ це зниження); (d) one-time retrieval admin-токена (prod; e2e читає сам).
+- *Власник:* `deploy/Dockerfile*`+compose (Phase-1 task-2/5), `Program.cs` startup (auto-gen+persist), Phase-2 task-9 (supersede LUKS-framing на encrypted-volume). DoD: «чистий `docker compose up` БЕЗ секрет-env → робочий wss + згенеровані CA/пеппери/admin-token на encrypted-томі; рестарт переюзає; e2e-harness читає їх із тому й ганяє матрицю; нуль секретів у env/logs/шарах образу».
+
 ## Глобальний Definition of Done (для КОЖНОЇ фази)
 
 Фаза не закрита, поки не виконані всі три умови:
