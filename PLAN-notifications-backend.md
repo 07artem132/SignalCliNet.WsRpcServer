@@ -514,6 +514,35 @@ admit(principal, account, recipient):
 
 **N4 (W13-W17 без власника) → ЗАКРИТО маршрутизацією вище:** W13→task-5, W14→Phase-3 task-3, W16→task-1, W17→task-12, кожне з DoD-рядком. Більше не «висить».
 
+### Рішення власника (2) — закриття A1 / A5 / D10 / D16+W9 (2026-06-25)
+
+**A1 (serializer source-gen reflection-fallback) → РІШЕННЯ: fallback лишаємо; «реєструй кожен DTO або runtime-fail» демотуємо до чесної прози; для НОВИХ secret-DTO — мандат source-gen + `[JsonIgnore]` + один точковий guard.**
+- *Чому:* `Combine(...Default, DefaultJsonTypeInfoResolver())` (`SignalRpcSession.cs:79-82`) — навмисний (коментар: типи як `ListAccountsResponse` з власним `[JsonConverter]`, які source-gen не референсить); прибрати fallback не можна. Корекційне:
+  - reframe: context = **perf/clarity-оптимізація**, не correctness-gate (reflection покриває коректність) → прибрати «fails at runtime» з `conventions.md`/V9.
+  - для **secret-несних** DTO (token/identity/invite-responses): обов'язково (а) зареєструвати у `SignalCliSerializerContext` (детермінована форма, не reflection-«серіалізуй усе public»), (б) `[JsonIgnore]` на pepper/raw-token/hash-полях, (в) **один** guard-тест, що ці типи резолвляться через `...Default`, не fallback. Таргетований guard на security-підмножину + захист від випадкової серіалізації секрету — не «machinery».
+- *Власник:* Phase-2 task-2 + `conventions.md` doc-fix. *Відхилено:* лишити прозу (хибна — runtime-fail'у немає); blanket-guard на ВСІ DTO (суперечить «no regression-guard machinery» + зайвий для не-secret типів).
+
+**A5 (RPC-поверхня без версіонування) → РІШЕННЯ: `apiVersion` + мінімальна capability-negotiation у handshake ЯК ЧАСТИНА Phase-2; transition-вікно відхилено.**
+- *Чому:* Phase-1 = loopback/self-host (нема networked-бази розширень, що говорять unauthed-Phase-1) → flag-day Phase-1→2 здебільшого не існує (G10 покриває міграцію акаунта). Реальна потреба — **forward**-версіонування: authed-контракт версіонується з дня народження, щоб Phase-3+ зміни не були flag-day.
+  - handshake несе client-`apiVersion`; сервер рекламує діапазон; mismatch → типізована «upgrade required», НЕ тихий `-32601`/behavioral-break. principal-фільтр `listAccounts`/`listGroups` = поведінка apiVersion≥2 (старий клієнт туди не дістане — не автентифікується).
+- *Власник:* Phase-2 task-1/task-4 + docs Phase-3 task-3. DoD «handshake несе apiVersion; version-mismatch → типізована upgrade-required, не -32601/silent».
+- *Відхилено:* transition-вікно (приймати unauthed тимчасово) — лишає relay відкритим на публічному біндингу = регрес D4/default-deny; лише-координований-реліз — недостатньо для Phase-3+.
+
+**D10 (напрям lookup при ротації pepper) → РІШЕННЯ: version-hint у prefix токена (1 lookup); компонується з W18.**
+- *Рішення:* токен = `ptzh_<pepperVer>_<base64url(random≥256bit)>_<checksum>`; сервер читає `<pepperVer>` → обирає pepper → **один** `HMAC(decoded_random, pepper[ver])` → один DB-lookup. pepper-версія не секретна.
+- *W18-композиція:* HMAC pre-image = **лише decoded random payload** (НЕ prefix/version/checksum), канонічно на issue і lookup → закриває й W18-канонізацію.
+- *Власник:* Phase-2 task-2. DoD «старі+нові токени резолвляться в 1 lookup через prefix-version-hint; HMAC pre-image = decoded-random-only».
+- *Відхилено:* 2-lookup (new-потім-old) — перевага «без зміни формату» moot (формат greenfield); дає rotation-window perf+timing-штраф.
+
+**D16+W9 (link-TTL 120с vs 30с RPC-таймаут на finishLink) → РІШЕННЯ: TTL=120с обом; finishLink — per-call timeout ≥ TTL (≈130с), НЕ глобальний bump; per-call-підтримку звірити спайком.**
+- *Чому:* підняти TTL небезпечно (one-time+identity-bound+rate-limit — захист; ширший TTL = ширше вікно griefing/exhaustion). Натомість 30с глобальний (`RequestTimeoutSeconds`, SignalCli.NET) зв'язує сам finishLink-виклик — якщо він блокує до скану, 30с вб'є ручний own-number-скан (до 120с).
+  - finishLink → **per-call timeout** (CancellationToken з дедлайном ≥ TTL), НЕ глобальний bump (інакше ламається bounded-timeout для send'ів).
+  - **Спайк:** звірити, що `SignalCli.NET InvokeMethodAsync` приймає per-call CT/timeout для finishLink (V5: той самий pipe + 30с + cancel-on-restart). Якщо ні — upstream-ask до SignalCli.NET.
+  - UX (client-контракт): QR безпосередньо перед сканом + 120с-countdown + дешевий re-startLink на expiry.
+- *Власник:* Phase-2 task-6 + спайк. DoD «own-number finishLink проходить за ручний скан у межах 120с (не вбитий 30с); глобальний send-timeout не змінено».
+
+**Залишковий зв'язок:** A1-доку-фікс (`conventions.md`) приєднується до N7 (README JDK) як батч doc-fix; D16+W9-спайк — до спайк-набору (D6 handshake / G7 own-number-listGroups).
+
 ## Глобальний Definition of Done (для КОЖНОЇ фази)
 
 Фаза не закрита, поки не виконані всі три умови:
