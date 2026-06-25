@@ -32,7 +32,7 @@ JSONRPC_REPO="${JSONRPC_REPO:-$PARENT/JSON-RPC.NET}"
 SIGNALCLI_REPO="${SIGNALCLI_REPO:-$PARENT/SignalCli.NET}"
 NUGET_SOURCE="${NUGET_SOURCE:-https://api.nuget.org/v3/index.json}"
 
-RESTORE_ARGS=(--source "$NUGET_SOURCE" -p:NuGetAudit=false)
+RESTORE_ARGS=(--source "$NUGET_SOURCE" -p:NuGetAudit=false -p:GeneratePackageOnBuild=false)
 
 echo "Feed dir:        $FEED_DIR"
 echo "JSON-RPC.NET:    $JSONRPC_REPO"
