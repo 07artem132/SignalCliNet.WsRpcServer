@@ -11,6 +11,16 @@ WsRpcServer — **тільки транспорт Signal-каналу** унів
 - Тестів — **0**. Auth / ізоляції користувачів — **нема**.
 - База JSON-RPC.NET уже містить `Authorization/` (RpcAuthorizeAttribute, IRpcAuthorizationPolicy, StaticRoleMapAuthorizationPolicy), `Security/` (mTLS, NodeIdentity, TLS), connection quotas, `WsRpcServerDiagnostics` — **підключаємо, не пишемо з нуля**.
 
+## Уточнення з рев'ю (внесено)
+
+Зовнішнє рев'ю + чек коду SignalCli.NET дали 4 рішення:
+
+1. **Модель зʼєднання — ЗАФІКСОВАНО: connect-on-demand для MVP.** MV3 Service Worker ефемерний (~30с idle → kill), персистентний WS вмирає з ним і дає reconnect-шторм. Сповіщення — потік **вихідний**, тому MVP: `connect → authenticate → send → close` на нотіф (немає півживого сокета, немає keep-alive-гімнастики). Персистентний WS + keep-alive (`chrome.alarms`) + exponential-backoff-with-jitter — **лише** коли додамо receive-шлях (Phase 3). Це клієнтський контракт (Потужність), сервер під нього готує backoff-friendly відповіді.
+2. **Backoff-friendly сервер.** Проти reconnect-шторму: `429` + `Retry-After` на перевищенні квоти, connection-quota per-IP/identity (Phase 2, rate-limit).
+3. **signal-cli IPC — НЕ вузьке місце (перевірено в коді).** SignalCli.NET уже: async `ReadLineAsync` на bg-таску (`JsonRpcClient.cs:286`), serialized async-запис `SemaphoreSlim(1,1)` (`:568,584`), кореляція `ConcurrentDictionary<id,TCS>` (`:42,356`) → паралельні in-flight, повільна відповідь не блокує інших і не блокує thread-pool WS-сервера; нотифікації через bounded `Channel(1024, Wait)` (`:101`). Socket-режим не юзається і **не потрібен** — pipe не bottleneck. Реальний cap — рейт-ліміти мережі Signal. → Жодної роботи тут, лише **perf-gate перед оптимізацією** (Phase 3).
+   - **Caveat (receive-шлях):** один stdout-loop + notification-channel `Wait` → повільний споживач нотифікацій робить head-of-line блок і для RPC-відповідей. Стосується лише Phase 3 (subscribe).
+4. **Агрегація/debounce/coalesce подій — НЕ цей репо.** «50 апдейтів обʼєкта ≠ 50 пушів» — шар підписок розширення (Потужність), не WsRpcServer. Фіксуємо в плані ідеї/клієнта.
+
 ## Глобальний Definition of Done (для КОЖНОЇ фази)
 
 Фаза не закрита, поки не виконані всі три умови:
@@ -104,7 +114,7 @@ Identity record: `{ id, displayName?, role (user|admin), linkedAccounts[], creat
    → `general-purpose`.
 4. **AuthZ + ізоляція (deny-by-default):** `listAccounts` = спільний бот + власні caller; `sendTextMessage`/`listGroups` дозволені на `{бот} ∪ {власні}`; `finishLink` прив'язує номер приватно до caller; деструктив над ботом — лише admin. **Набір акаунтів виводиться з principal, не з аргумента клієнта** (анти-IDOR).
    → `general-purpose`.
-5. **Rate-limit/DoS:** per-token cap конектів + msg-rate (~100/хв) + msg-size cap (64KB) + auth-timeout + per-IP cap неавтентиф. сокетів (фреймворковий ConnectionQuota як база).
+5. **Rate-limit/DoS + backoff-friendly:** per-token cap конектів + msg-rate (~100/хв) + msg-size cap (64KB) + auth-timeout + per-IP cap неавтентиф. сокетів (фреймворковий ConnectionQuota як база). На перевищенні — `429` + `Retry-After` (проти reconnect-шторму MV3 SW).
    → `cavecrew-builder`.
 6. **Hardening at-rest + транспорт:** AES-256-GCM на signal-cli storage (`SignalCliStorageData/`), майстер-ключ у secrets-manager/env (не на тому ж диску), дир `0700`, окремий сервіс-юзер; `wss://` TLS 1.3 (1.2 floor) + HSTS у деплої.
    → `general-purpose`.
@@ -131,15 +141,17 @@ Identity record: `{ id, displayName?, role (user|admin), linkedAccounts[], creat
    → `cavecrew-builder`.
 2. **Структуровані логи + таксономія помилок** на RPC-межі (єдиний формат `RpcErrorException`).
    → `general-purpose`.
-3. **Контракт reconnect/backoff** для клієнта — задокументувати поведінку при падінні signal-cli.
+3. **Контракт зʼєднання + reconnect/backoff** для клієнта — задокументувати: MVP connect-on-demand (send-only); персист+keep-alive+exponential-backoff-with-jitter лише з receive; поведінка при падінні signal-cli; реакція на `429`/`Retry-After`.
    → docs-задача.
-4. **(Опційно) Receive/events** — `ISignalEventsRpc` (subscribe), якщо нотіфам потрібні delivery-receipts чи вхідні. Інакше відкласти.
-   → `Explore` (оцінити поточний стан events-шару) → рішення робити/відкласти.
-5. **Тести fail-path:** signal-cli впав посеред роботи → сервер відновлюється; невалідний ввід → коректна RPC-помилка.
+4. **Perf-gate перед оптимізацією IPC.** Load-test pipe під реальним сплеском **перш ніж** щось чіпати. Базлайн: SignalCli.NET уже async/TCS/bounded-channel (не bottleneck — див. «Уточнення з рев'ю»). Socket-режим signal-cli — лише якщо тест докаже потребу.
+   → `general-purpose` (load-smoke + рішення).
+5. **(Опційно) Receive/events** — `ISignalEventsRpc` (subscribe), якщо нотіфам потрібні delivery-receipts чи вхідні. Інакше відкласти. **Caveat:** один stdout-loop + notification-channel `Wait` → повільний споживач робить head-of-line блок і RPC-відповідям; передбачити окремий споживач / drop-policy.
+   → `Explore` (оцінити events-шар) → рішення робити/відкласти.
+6. **Тести fail-path:** signal-cli впав посеред роботи → сервер відновлюється; невалідний ввід → коректна RPC-помилка.
    → `general-purpose`.
-6. **CI:** build + test + docker publish.
+7. **CI:** build + test + docker publish.
    → `general-purpose`.
-7. **Docs:** `docs/ops-runbook.md` + повний API-reference усіх RPC-методів.
+8. **Docs:** `docs/ops-runbook.md` + повний API-reference усіх RPC-методів.
 
 ### Умови зупинки (DoD Фази 3)
 - [ ] e2e: вбити signal-cli посеред прогону → сервер відновлюється; метрики показують лічильники; смоук на N конектів.
