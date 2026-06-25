@@ -2,7 +2,7 @@
 
 ## Контекст і межі
 
-WsRpcServer — **тільки транспорт Signal-каналу** універсального модуля сповіщень. Детект подій (CREATED/UPDATED/DELETED, layer health, стрім-логи VEZHA, помилки обробки), підписки, UI, Chrome push, element — усе на боці розширення (Потужність). Цей сервер лише надійно шле в Signal та керує акаунтами/пристроями/групами.
+WsRpcServer — **генеричний WS JSON-RPC Signal-gateway** (R3.3): send + account/device/group + receive-for-codes. «Універсальний модуль сповіщень Потужності» — **один зі споживачів**, не єдиний; нижче написано з його перспективи, але сервіс consumer-agnostic. Детект подій (CREATED/UPDATED/DELETED, layer health, стрім-логи VEZHA, помилки обробки), підписки, UI, Chrome push, element — усе на боці розширення (Потужність). Цей сервер лише надійно шле в Signal та керує акаунтами/пристроями/групами.
 
 Поточний стан (станом на старт плану):
 - Ядрові RPC-методи працюють end-to-end A→B: `listAccounts`, `startLink`, `finishLink`, `sendTextMessage`.
@@ -542,6 +542,83 @@ admit(principal, account, recipient):
 - *Власник:* Phase-2 task-6 + спайк. DoD «own-number finishLink проходить за ручний скан у межах 120с (не вбитий 30с); глобальний send-timeout не змінено».
 
 **Залишковий зв'язок:** A1-доку-фікс (`conventions.md`) приєднується до N7 (README JDK) як батч doc-fix; D16+W9-спайк — до спайк-набору (D6 handshake / G7 own-number-listGroups).
+
+### Нова капабіліті — group-claim через in-chat-код (рішення 2026-06-25)
+
+**Призначення:** per-group recipient-authorization для спільного бота. Юзер доводить доступ до групи, вписавши виданий код у чат → дістає право слати в ЦЮ групу через бота. **Апгрейд W17 для груп:** авторизація на рівні **(identity, group)**, а не лише account → знімає «бот = відкрите реле» для груп-таргету (для прямих E.164 W17-residual лишається). Змінює правило bot-моделі: `sendTextMessage` у **групу** через спільний бот тепер гейтиться claim'ом, не лише account-guard'ом.
+
+**Потік:**
+1. Юзер **сам** додає бота в групу G (Signal-native, за номером бота).
+2. `requestGroupClaim(targetGroupId)` → сервер видає **one-time-код**, TTL (~10 хв), прив'язаний до **(identity U, заявлена G)**; rate-limited (як інвайти task-7).
+3. Юзер вписує код у чат G.
+4. Бот **безперервно авто-ресивить** усі вхідні (R3.1) → бачить код у потоці G → матчить pending-claim.
+5. Verify: код з'явився в **заявленій** G, у межах TTL, збіг → **bind U↔G** (send-right у durable-сторі), консумувати код (one-time, атомарно).
+
+**Receive — РЕВІЗОВАНО (R3.1): безперервний авто-receive у Phase-2** (не bounded on-demand, не manual). Бот авто-ресивить усі вхідні й сканує на коди окремим non-blocking споживачем. Наслідки (head-of-line, privacy-scope, own-number) — у Рішенні власника (3) §R3.1.
+
+**Безпековий спек (пінимо):**
+- **Code-binding:** one-time + TTL + прив'язка до **(U, заявлена G)**. In-group-видимість коду — ОК: інший член не rebind-не (мапиться на U + лише на G + consumed). Залишок — **griefing** (співучасник «спалює» код → claim U падає): мітигація — bind-до-G + короткий TTL + rate-limit re-request.
+- **Атомарний consume-and-bind:** `UPDATE…SET consumed=1 WHERE code=? AND consumed=0` + rows-affected ПЕРЕД bind (патерн W20/finishLink); паралельні confirm не подвоюють bind.
+- **Footprint / анти-бан (D2):** per-identity **quota на group-claims** (бот не розростається безмежно); abuse-log claim'ів; бот у багатьох групах = receive-навантаження + privacy-експозиція.
+- **Privacy під час receive:** скануємо лише pending-коди; тіла/номери/вкладення **не логувати/не зберігати** (privacy-контракт + W6/A2).
+- **Рівень авторизації:** «член може слати в групи, де він є» (будь-який член може додати бота) — НЕ admin-only; зафіксувати в `shared-bot.md`.
+- **Revocation:** binding падає при revoke identity (каскад); якщо бота прибрали з G — send фейлиться (Signal відмовляє); опційний admin-revoke binding'у.
+- **G9-зв'язок:** `listGroups` тепер скоупити до **claim'нутих** груп caller'а (замість admin-only) — частково закриває cross-tenant leak.
+
+**Власник:** нова Phase-2 task (group-claim) між task-6 (link-session) і task-7 (інвайти) — той самий one-time/TTL/atomic-consume/rate-limit апарат. Нові RPC `requestGroupClaim`/`confirmGroupClaim` — через chokepoint (токен потрібен; recipient-proof = сам claim). Код — секрет → `[JsonIgnore]` + source-gen DTO (A1). DoD:
+- [ ] юзер-A claim'ить G кодом → дістає send-right у G; send проходить.
+- [ ] юзер-B (без claim) шле в G → відмова (recipient-auth, не лише account).
+- [ ] перехоплений/повторний код → відмова (one-time, bound-до-U+G); griefing-burn → re-request працює.
+- [ ] код-сканер на авто-receive не блокує RPC-шлях (окремий споживач, R3.1); тіла не логуються.
+- [ ] per-identity group-claim quota спрацьовує; `listGroups` віддає ВИКЛЮЧНО claim'нуті/власні групи caller'а (R3.2).
+
+### Рішення власника (3) — 4 уточнення моделі (2026-06-25)
+
+**R3.1 — Receive: безперервний авто-receive (СКАСОВУЄ bounded-on-demand + V2-manual-передумову).**
+- *Зміна:* бот **автоматично ресивить ВСІ повідомлення** (persistent receive), сканує на claim-коди; знайшов код → асайн групи до identity-видавця. `UseManualReceiveMode=false` / on-start, НЕ manual.
+- *Скасовує:* «bounded on-demand receive у Phase-2» (group-claim) і V2-тезу «manual = дефолт, send-only з коробки». **Phase-1 task-7 інвертується:** не «no-op», а **увімкнути авто-receive**.
+- *Наслідки (рев'ю-дисципліна):*
+  - **Уточнення-3 head-of-line ТЕПЕР АКТУАЛЬНИЙ:** один stdout-loop + notification-channel `Wait` → повільний код-сканер блокує й RPC-відповіді. → **окремий non-blocking споживач + drop-policy** для сканера (не на гарячому RPC-шляху). Phase-2-робота тепер, не Phase-3-caveat.
+  - **Privacy-експозиція ↑↑:** бот бачить КОЖНЕ вхідне (усі групи, усі DM). Скан-і-викинь; тіла/номери/вкладення **ніколи** не логувати/зберігати (W6/A2 під ще більшим навантаженням).
+  - **Own-number scope (нова межа):** daemon multi-account on-start ресивить і за **лінковані власні номери** → сервер обробляє особистий вхідний трафік юзера. Прийнятно self-host; для shared-host — **нова privacy-межа**, зафіксувати в `shared-bot.md`. (Заодно: **G7 stale-listGroups стає moot** — sync приходить через receive.)
+  - **Анти-бан:** receive — нормальна клієнтська поведінка (сам по собі ризик не підвищує); ризик — у footprint/обсязі.
+- *Власник:* Phase-1 task-7 (інвертувати на авто-receive) + Phase-2 group-claim task (сканер = окремий споживач). Phase-3 subscribe/event-RPC-surface лишається опційним (це лише RPC-експозиція подій, не сам receive-loop).
+
+**R3.2 — listGroups віддає ВИКЛЮЧНО групи користувача (жорстке правило, повністю закриває G9).**
+- *Зміна:* `listGroups` НІКОЛИ не повертає не-claim'нуті групи; лише асайнуті caller'у (own-number + claim'нуті кодом). Outbound-фільтр — hard default-deny, не «admin-only АБО accepted-risk».
+- *Закриває:* **G9** повністю; **W22** (fail-closed фільтр) критичний саме тут — виняток у фільтрі → empty, ніколи raw.
+- *Власник:* Phase-2 task-1 (`FilterReadOutputAsync`). DoD: «listGroups A → лише групи A; нічого чужого навіть на спільному боті».
+
+**R3.3 — Сервіс consumer-agnostic; Потужність — один зі споживачів (де-coupling).**
+- *Зміна:* розробляємо **генеричний WS JSON-RPC Signal-gateway** (send + account/device/group + receive-for-codes); «модуль сповіщень Потужності» — **один споживач** із можливих багатьох. Узгоджується з CLAUDE.md («any language that speaks WebSocket + JSON-RPC»).
+- *Наслідок для знахідок:* **C1-C6 (MV3-специфіка)** = контракт ОДНОГО споживача (Потужність-розширення), НЕ вимоги сервісу. **Серверні половини лишаються генеричними й обов'язковими:** `apiVersion`-handshake (A5), subprotocol-token auth, **idempotency-key/`messageId`** (C2-серверна), **server-heartbeat** опція (C5-серверна), error-codes, echo субпротоколу (C4). HOW консьюмер це задовольняє (IndexedDB-ключ C1, chrome.alarms C5, MV3-lifecycle C2) — **consumer-side**, у його репо/доках.
+- *Наслідок для меж:* детект подій (CREATED/UPDATED, VEZHA) — домен Потужності, не сервісу. Docs: `docs/` описують **генеричний контракт**; Потужність-specifics — як приклад споживача.
+- *Власник:* doc-рефрейм (Phase-1 task-6 `self-host.md` + Phase-3 API-reference) — генеричний контракт; C1-C6 перенести в «consumer-contract (приклад: Потужність-MV3)».
+
+**R3.4 — Усі сертифікати (вкл. CA) авто-генеруються на старті, якщо не вказані явно (знімає D3-toil, не D3-trust).**
+- *Зміна:* нема явно сконфігурованих cert/CA → сервер **генерує на старті**: self-signed CA + server-cert (wss) + CA, що підписує client-cert для mTLS node/admin. Zero-config TLS для self-host.
+- *Persist-once (критично):* генерувати **лише якщо відсутні**; персистити на LUKS (CA-private `0600`); **переюзати** на наступних стартах — інакше fresh CA щоразу зламає весь client-trust. «якщо не вказані явно» = generated теж персистяться.
+- *Наслідки:*
+  - **D3-toil знято** (сервер сам робить CA/cert), але **D3-trust лишається:** self-signed → браузерний `wss` з extension'у впаде, доки консьюмер не додасть root у trust-store. Авто-ген прибирає серверну рутину, не клієнтську довіру — зафіксувати в `self-host.md`.
+  - **D4-fail-closed:** TLS тепер завжди доступний → менше шансів no-TLS на публічному біндингу; startup-assertion однаково перевіряє, що TLS активний перед non-loopback.
+  - **mTLS:** авто-CA = trust-root node-to-node/admin (framework CustomRootTrust); extension — НЕ mTLS (subprotocol-token), лише довіряє server-cert.
+  - **Renewal:** авто-cert має expiry → на старті renew, якщо прострочений/близько; CA — довший термін.
+- *Власник:* Phase-2 task-9 + `Program.cs` startup. DoD: «чистий старт без cert-конфігу → робочий wss + персистований CA; рестарт переюзає той самий CA (client-trust не ламається)».
+
+**R3.5 — Особисто-лінкований акаунт = приватний власнику; отримується через `listAccounts`; claim/scan — лише shared-bot.**
+- *Правило:* own-linked акаунт (юзер залінкував свій номер) — **приватний виключно для identity, що його залінкувала**. Видимий лише у **його** `listAccounts` (спільний бот read-only + власні лінковані; чужі приватні — НІКОЛИ). Для власного акаунта — **повне володіння**: `listGroups` повертає ВСІ групи цього акаунта (claim НЕ потрібен — це його номер). Group-claim код-флоу — **виключно shared-bot концепт**.
+- *Наслідок для R3.1 (auto-receive):* код-сканер бігає **лише по receive-потоку shared-bot акаунта**, НЕ по приватних own-linked (нема сенсу сканувати приватний трафік юзера на коди + privacy-overreach). Own-linked auto-receive — лише для sync/власних потреб; incoming приватний власнику.
+- *Наслідок для W25 (daemon не ізолює акаунти):* ізоляція має триматись і для **incoming** — повідомлення own-account юзера A ніколи не сурфейсити юзеру B (не лише outbound listAccounts/listGroups, а й будь-яка receive/event-поверхня Phase-3). Per-account scoping на вході — обов'язковий.
+- *Власник:* Phase-2 task-1 (`listAccounts` outbound: own-linked лише власнику) + task-3 (стор прив'язок `account→owning-identity` + private-флаг) + group-claim task (сканер scoped до shared-bot). DoD: «A не бачить own-linked акаунт B у `listAccounts`; код-сканер не чіпає own-account incoming; own-account `listGroups` повертає всі групи власника без claim».
+
+**R3.6 — Адмін бачить ВСІ лінковані акаунти (override R3.5 для admin-ролі).**
+- *Правило:* `listAccounts` для principal з `role=admin` повертає **всі** акаунти (спільний бот + усі own-linked усіх юзерів). Для `role=user` — лише own+shared (R3.5). Outbound-фільтр `FilterReadOutputAsync` — **role-conditional**: admin → all-allow гілка, user → own+shared; default-deny (W22 fail-closed: виняток → empty, ніколи raw).
+- *Visibility ≠ operation (рекомендований дефолт):* адмін **бачить** (lists) усі лінк-акаунти для нагляду; **слати/керувати** через чужий приватний own-linked — НЕ default (impersonation/privacy). Revoke/unlink чужого акаунта адміном — окрема **admin-account-management** операція (аудиту, не silent send-as). [Якщо треба, щоб адмін ще й слав через будь-який акаунт — окрема явна audited-capability; зараз НЕ закладено.]
+- *Наслідки:*
+  - **Blast-radius:** admin-компрометація = бачить номери/девайси всіх → admin-роль під жорстким контролем (D14/task-8 bootstrap one-time-токен у `0600`-файл, G5; PoP для адміна; admin-токен з власним lifecycle/revoke).
+  - **Audit (M8/task-11):** admin-перегляд усіх акаунтів = чутливий read → у audit-trail (без номерів у тілі — лише «admin X: listAccounts(all)», count).
+  - **listGroups:** уточнення стосувалось лише «лінк-акаунтів» → admin-listGroups-scope НЕ розширюю автоматично (groups лишаються per-claim/own — G9/R3.2); потрібен admin-перегляд усіх груп — окреме рішення.
+- *Власник:* Phase-2 task-1 (role-conditional outbound filter) + task-8 (admin bootstrap/role) + task-11 (audit). DoD: «admin `listAccounts` → усі лінк-акаунти; user → лише own+shared; admin all-accounts read у audit-trail; admin НЕ шле через чужий приватний акаунт без явної audited-операції».
 
 ## Глобальний Definition of Done (для КОЖНОЇ фази)
 
