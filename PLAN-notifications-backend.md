@@ -252,6 +252,114 @@ WsRpcServer — **тільки транспорт Signal-каналу** унів
 - *Доказ:* `SignalCli.NET/.../SignalCliHealthMonitor.cs:131 ForceRestartAsync` + `JsonRpcClient.cs:156 OnStreamPairChanged` скасовує **ВСІ** pending по **всіх** акаунтах на кожен рестарт; restart-budget глобальний (`MaxRestartAttempts=3`/`RestartWindowSeconds=60`).
 - *Мітигація:* нічого нового кодити — фіксувати в ops-докс (Phase-3): один health-fail рве in-flight усіх тенантів; рестарт-шторм одного акаунта вичерпує глобальний budget → деградація для всіх.
 
+### Звірка-4 — multi-agent ревю плану проти коду (четверта ітерація, 2026-06-25)
+
+Прохід 1-2 паралельними агентами: аудит усіх `file:line`-цитат, обсягу version-bump, app-side, SignalCli.NET-поверхні, deploy/CI, handshake-seam, внутрішніх суперечностей плану та адверсаріальний security-review. Цитати Звірки-1/2/3 **усі підтверджені** (дрібний drift: `SignalDevices.cs:42` = декларація, реальний `InvokeMethodAsync("finishLink")` `:51-57`; `RpcAuthorizationEnforcer.cs:43` = коментар, тіло `:34-60`; `SignalCliOptionsExtensions.cs:46-47` — там `jsonRpc`+receive-mode, account-арга в launch немає взагалі). Нижче — лише **нові** знахідки. **W1, W12, W13 — keystone-блокери: читати першими.**
+
+**🔴 W1. Офлайн-білд зламаний СЬОГОДНІ → блокує Фазу 1, не лише Фазу 2 (інвертує діаграму порядку §486).**
+- *Доказ:* `build-local-feed.sh:54-55` пакує sibling-джерело **без `-p:Version`** → бере `JSON-RPC.NET/Directory.Build.props:39` = **2.7.0**; апка пінить `JSON-RPC.NET 1.1.0` (`csproj:13`); `NuGet.Config:9-13` packageSourceMapping забороняє fallback на nuget.org. → `dotnet restore` падає «Unable to find package 1.1.0, found 2.7.0». Приватний feed (unreachable) теж не має 1.1.0. Тобто Phase-1 task-2 (docker build) і task-5 (clean `docker compose up` e2e) **не пройдуть** до bump'у, який план відкладає у Phase-2 task-0.
+- *Мітигація:* або **перенести task-0 (bump 1.1.0→2.7.0) ПЕРЕД Фазу 1**, або будувати Фазу 1 через hand-pinned feed (checkout `JSON-RPC.NET` на тегу 1.1.0, не sibling-2.7.0). Перший варіант чесніший — Фаза 1 однаково потребує робочого білда.
+
+**🟠 W2. CI-ordering gap: DoD кожної фази вимагає «CI зелений», CI створюється лише Phase-3.**
+- *Доказ:* `.github/workflows/` в апці **немає** (лише `copilot-instructions.md`); Phase-1 DoD (§304) і глобальний DoD (§260) вимагають «CI зелений», але CI = Phase-3 task-7. Plus «test»-нога CI порожня до Phase-1 task-4 (нема `tests/`).
+- *Мітигація:* bootstrap CI у Phase-1 поряд із task-4, **або** переформулювати Phase-1/2 DoD на «тести проходять локально» до Phase-3. Siblings мають готові workflow для копії; стек: **xUnit 2.9.3 + Moq 4.20.72 + Microsoft.NET.Test.Sdk 18.7.0** (обидва sibling-репо ідентичні).
+
+**🟡 W3. task-2 переоцінено / task-5 недооцінено.**
+- *Доказ:* `deploy/docker-compose.yml` **уже існує** (33 рядки) → task-2 = верифікація, не авторинг; compose вішає package-feed `Dockerfile` (потребує `GITHUB_TOKEN`), не `Dockerfile.from-source`. Clean docker build потребує мережі до **3 хостів** (nuget.org, github/AsamK signal-cli, github/adoptium JDK 25) → не air-gappable; payload кілька сотень MB.
+- *Мітигація:* task-2 звести до перевірки; task-5 — задокументувати мережеві передумови або pre-bake базовий образ.
+
+**🔴 W4. task-0 недооцінює міграцію: реальний злам — інверсія template-method, не «AddJsonRpcCore 5→7» і не «DI-рядок».**
+- *Доказ:* апка викликає **config-only** `AddJsonRpcCore(configureOptions)` (`SignalRpcExtensions.cs:26`), а не generic-overload → «5→7 type-params» до неї не стосується. У 2.0.0 `AbstractSubscriptionManager` зробив `Subscribe/Unsubscribe/UpdateSubscription` **non-virtual** template-wrapper'ами (база володіє `OperationLock`); override-клас апки (`SubscriptionManager.cs:30,130,196`) з `public override … (string account, object eventTypes)` + ручним локом **не скомпілюється**. Каскад: `GetClientsForEvent` `object`→typed (`:191-193`, прибрати касти); `EventProcessor._subscriptionManager` стає generic (`:18,75`); DI-рядок `:29` → `ISubscriptionManager<SignalEventTypes, BaseSignalEventArgs>` — **пастка: порядок type-арг протилежний** до `AbstractSubscriptionStore<TSub,TEventArgs,TEventType>`. `SubscriptionStore`/`RpcServiceRegistry`/`SignalRpcServer`/`SignalRpcSession` ctor-сумісні — переживають bump.
+- *Мітигація:* task-0 розписати як **переписування override-класу `SubscriptionManager` на `*Core`-патерн** (викинути ручний лок, `object`→typed) + 3 каскадні правки, не «DI + arity». Це основний обсяг task-0.
+
+**🟠 W5. Модель «нема DI-рядка = вимкнено» неточна (уточнює V7).**
+- *Доказ:* (а) звичайні адаптери — reflection-discovery знаходить інтерфейс, але `ServiceProvider.GetService` повертає null → тихо пропускає (`AbstractRpcServiceRegistry.cs:166-172`), тож DI-рядок Groups **необхідний** (план доходить правильної дії, але механізм інший). (б) `ISignalEventsRpc` — **client-aware**, конструюється через `ActivatorUtilities` (`:187`) **без** DI-рядка; адаптер подій існує, незареєстрований, але discovery міг би його підняти сам — асиметрія, яку план не згадує.
+- *Мітигація:* у task-1 зафіксувати обидва механізми; вирішити долю незареєстрованого `SignalEventsRpcAdapter` (Phase-3 receive-шлях).
+
+**🟠 W6. `SignalMessageRpcAdapter.cs:25` логує `account` (= номер) на Information → порушення privacy-rule #4.**
+- *Доказ:* `_logger.Log…("send text message from account {Account}", account)` — account id для бота/власного номера = E.164. CLAUDE-rule #4: не логувати номери, лише method/status/id.
+- *Мітигація:* прибрати account із Information-шаблону (або хешувати/обрізати); звірити решту адаптерів. Phase-1 quick-fix.
+
+**🟠 W7. `MaxMessageSizeBytes`-чек спрацьовує ПІСЛЯ повного буферингу (поглиблює V3).**
+- *Доказ:* `SignalRpcSession.cs:221` читає вже **зібране** `size` в `OnWsReceived` — NetCoreServer забуферив повне повідомлення в пам'ять до виклику хендлера. Зниження конфігу 100MB→64KB **не** обмежує піковий memory під час накопичення фреймів (це робить власний max-frame-buffer NetCoreServer).
+- *Мітигація:* справжній slowloris/big-msg захист — на рівні NetCoreServer WS-buffer / frame-count / assembly-timeout (net-new, як план і каже), не лише конфіг-значення.
+
+**🟠 W8. Поверхня ізоляції ширша за send/listGroups — `AssertAccountAllowed` потрібен на КОЖНОМУ account-bearing методі.**
+- *Доказ:* `ISignalMessage.SendTextMessageAsync` → `UnifiedSendRequest(Account: options.Account…)` (`SignalMessage.cs:221`) лише з `ArgumentNullException`/`ValidateRecipients`, **без** ownership-чека; той самий патерн у device-mgmt, payments, accounts-lifecycle. Wrapper дає нуль defense-in-depth на **жодному**.
+- *Мітигація:* chokepoint IDOR-guard застосувати до повного account-bearing набору, не лише до 5 MVP-методів; build-guard має покривати кожен такий метод.
+
+**🟠 W9. 30с глобальний RPC-таймаут зв'язує `finishLink` (тісніший за link-TTL 120с, окремо від D16).**
+- *Доказ:* `SignalCliOptions.RequestTimeoutSeconds=30` (`:80`) — один глобальний таймаут на ВСІ методи, вкл. `finishLink`. Для own-number ручного QR-скану 30с може не вистачити; link-**сесія** живе 120с, але `finishLink`-**виклик** помирає на 30с. App не override-ить.
+- *Мітигація:* для own-number flow підняти `RequestTimeoutSeconds` (або per-call timeout) до ≥ link-TTL; звірити з D16 (UX ручного скану).
+
+**🟡 W10. Restart-cancel віддає голий `OperationCanceledException`, нерозрізнюваний від client-cancel (ускладнює V10 fail-path).**
+- *Доказ:* `OnStreamPairChanged` (`JsonRpcClient.cs:162-167`) скасовує in-flight через transient CTS → catch-сайт не відрізнить «втрачено через health-restart, ретраїти» від «клієнт відмінив, не ретраїти».
+- *Мітигація:* у Phase-3 fail-path обернути/мапити restart-cancel в окремий тип (або корелювати з process-state), щоб нотіф не губилась мовчки.
+
+**🟠 W11. NetCoreServer 8.0.7 `OnWsConnecting` НЕ авто-echo-ить субпротокол і НЕ читає Origin (поглиблює V4).**
+- *Доказ:* `OnWsConnecting(HttpRequest,HttpResponse)` (`public virtual`, доступний на **plaintext** `AbstractJsonRpcSession`) дає reject (`return false`/non-101) — seam існує. Але handshake **не читає** `Sec-WebSocket-Protocol`/`Origin` і **echo-ить нічого**. Наслідки: (а) Origin-allowlist — ручний парс request-заголовків; (б) echo non-auth субпротоколу — **обов'язкова ручна `SetHeader`**, бо інакше RFC 6455 §4.2.2 клієнт може обірвати (present-but-unechoed); (в) leak токена повертається ЛИШЕ при наївному копіюванні всього client-list. Seam **не залежить** від bump 1.1.0→2.7.0 (NetCoreServer-рівень) → handshake-reject можна робити незалежно; токен→principal у authorization потребує bump.
+- *Мітигація:* у task-4 явно: override `OnWsConnecting` на `SignalRpcSession`, ручний Origin-чек + явний `SetHeader("Sec-WebSocket-Protocol", <non-auth>)`; ніколи не копіювати весь client-list. Спайк лишається (емпірично проти restored DLL 8.0.7 — git-тегу нема, лише NuGet).
+
+#### Внутрішні суперечності плану (reasoning-прохід — пари, які план не зводить)
+
+**🔴 W12. Anti-ban реактивний детект потребує receive-каналу, який Phase-1 вимикає, а Phase-3 робить «опційним».**
+- *Доказ:* D2/Уточнення-6/Phase-3 task-6 покладаються на детект `-5`/`-6`/proof-required; план припускає, що всі вони приходять синхронно як типізовані винятки з **send**-виклику. Але Signal часто сигналить throttle/proof-required **асинхронно через receive** (demon у `manual`, V2). Receive = «Опційно… відкласти» (Phase-3 task-5) **прямо суперечить** anti-ban як load-bearing.
+- *Мітигація:* емпірично довести, що КОЖЕН ban-релевантний сигнал приходить на return-path `InvokeMethodAsync`; якщо ні — receive стає **обов'язковим** для anti-ban, не опційним. Це може підняти receive у Phase-2.
+
+**🔴 W13. G3 ⊥ G11 — взаємовиключні, план перелічує обидва як сумісні.**
+- *Доказ:* G3 вимагає atomic-locked-**durable** декремент бюджету ПЕРЕД кожним send (correctness); G11 визнає цей single-SQLite-writer bottleneck'ом і пропонує coalesce-на-таймері. Але coalesce **ламає** «persist ДО send» fail-safe: send комітиться в Signal до durable-декременту → crash-window over-send → бан (саме те, що Уточнення-6 забороняє).
+- *Мітигація:* **вибрати один режим**. Або строгий atomic-durable (прийняти throughput-стелю, можливо micro-batch під тим самим локом), або coalesce + явно прийняти crash-window over-send-ризик (несумісно з анти-баном). Не можна мати обидва.
+
+**🟠 W14. Connect-on-demand vs PoP-per-connect — бюджет латентності не зведений.**
+- *Доказ:* Уточнення-1 (1 нотіф = `connect→auth→send→close`) + PoP «на КОЖЕН connect» + lookup «на КОЖЕН connect». План виправдовує «дешево» лише для DB-lookup, мовчки успадковує для важчого **PoP round-trip** (server→client→server) на кожну нотіф.
+- *Мітигація:* зважити PoP-вартість на ефемерному шляху; можливо short-lived post-PoP session-resumption для серій нотіфів, або прийняти латентність явно.
+
+**🟠 W15. G1 lockfile активно ПОГІРШУЄ failover.**
+- *Доказ:* rolling-restart overlap — саме те, що `O_EXCL` lockfile відмовляє → новий інстанс не стартує доки старий повністю не звільнить → гарантований availability-gap на кожен деплой. G1 (correctness) і availability-ціль у прямій тензії.
+- *Мітигація:* задокументувати deploy = свідомий downtime-window (stop-old→start-new, не overlap); зважити graceful-handoff lockfile (короткий TTL/takeover-протокол), якщо downtime неприйнятний.
+
+**🟠 W16. Три+ rate-limit-шари ніколи не зведені в одне admission-control правило.**
+- *Доказ:* агрегатний бот-бюджет + per-user квота + new-recipient лічильник (D2) + Phase-3 global-pause — чотири незалежні gate, кожен відмовляє окремо. G2 зводить лише пару aggregate↔per-user; D2-counter не вфолдований.
+- *Мітигація:* одна явна admission-функція (порядок перевірок, який gate що повертає, як вони компонуються) — щоб не голодоморили одне одного.
+
+**🟠 W17. Важкий auth-стек непропорційний прийнятому ризику «бот = відкрите реле».**
+- *Доказ:* головний abuse-вектор нотіф-реле — спам/харасмент на довільного E.164 через спільний бот — **прийнятий як ризик** (нема доказу володіння отримувачем). 11 hardening-задач захищають лише від неавтентиф. абʼюзу й крадіжки токена; PoP (D7) не спиняє malicious-extension. Інвестиція vs залишковий ризик не зведені.
+- *Мітигація:* або підсилити recipient-сторону (opt-in/allowlist отримувачів, verified-recipient), або явно прийняти й задокументувати, що auth-стек = захист акаунт-ізоляції (own-number), НЕ recipient-абʼюзу; не продавати його як останнє.
+
+#### Адверсаріальний security-review (нові діри поза D/G/V)
+
+**🔴 W18. HMAC pre-image не канонізований.**
+- *Ризик:* не зафіксовано ЯКИЙ рядок HMAC-иться (raw-wire / base64url-decoded / prefix+checksum-stripped). Mismatch issue↔lookup → масовий fail-closed (DoS) або, якщо prefix/checksum теж у pre-image, колізії.
+- *Мітигація:* одна канонічна форма (тільки decoded random payload, без prefix/checksum) на обох сайтах + round-trip тест-пін.
+
+**🟠 W19. «Constant-time compare» обіцянка хибна для stored-lookup моделі.**
+- *Ризик:* lookup = DB-індекс по `HMAC(token,pepper)` (B-tree short-circuit), не constant-time. При 256-bit pre-image timing — не-загроза, але обіцянка вводить implementer'а в оману.
+- *Мітигація:* прибрати «constant-time» обіцянку (визнати, що index-lookup і Є compare; 256-bit робить timing безпечним), АБО constant-time порівняння повного `v1$hash` після fetch по coarse-prefix.
+
+**🔴 W20. `redeemInvite` без атомарного consume (G12 покриває лише counter, не consume-and-bind).**
+- *Ризик:* `finishLink` має atomic one-time-гашення; `redeemInvite` (token-LESS TOFU-корінь enrollment'у device-pubkey, D1) — лише rate-limited. Паралельні redeem одного коду → 2 attacker-device з 1 інвайта, або race проти легітимного юзера за прив'язку ключа.
+- *Мітигація:* `UPDATE…SET consumed=1 WHERE code=? AND consumed=0` + rows-affected перевірка **перед** реєстрацією pubkey (той самий патерн, що `finishLink`).
+
+**🟠 W21. Rotation залишає вікно з 2 валідними токенами.**
+- *Ризик:* cascade-revoke специфіковано лише для **revoke**; рутинна rotation = «видати новий opaque» без atomic-set `IsRevoked` на старому → вкрадений-але-ротований токен живе до незалежного 12h TTL.
+- *Мітигація:* rotation atomically `IsRevoked=1` на попередньому в тій самій транзакції, що інсертить наступний; zero-overlap як інваріант + тест.
+
+**🟠 W22. `FilterReadOutputAsync` fail-open на винятку.**
+- *Ризик:* default-deny заявлений для dispatch, не для output-filter. Виняток у фільтрі (malformed principal, null `linkedAccounts`) → якщо обгорнуто слабко, повертає **нефільтрований** response = крос-тенант leak усіх акаунтів/груп.
+- *Мітигація:* фільтр fail-closed — будь-який виняток → empty/error, ніколи raw; fault-injection тест.
+
+**🟠 W23. Build-guard — лише unit-test, не dispatch-time інваріант.**
+- *Ризик:* `[Fact(Skip)]` / `--filter` / local `dotnet build` без `dotnet test` / disabled-CI-step → un-policied метод шипиться відкритим. Опція (б) плану (атрибут+guard) **не** runtime-fail-closed; забутий атрибут ловить лише тест.
+- *Мітигація:* мандат опції (а) — pre-dispatch фільтр відмовляє будь-який метод поза явним реєстром політик на **dispatch-time**; build-guard = belt-and-suspenders, не єдиний gate.
+
+**🟠 W24. Abuse-log = детермінований equality-oracle БЕЗ leak.**
+- *Ризик:* `HMAC(pepper_abuse, account‖recipient)` детермінований → однакова пара дає однаковий digest. На **спільному боті** (account константа) будь-хто з read-доступом до abuse-log (ops/backup/майбутній metrics-export D13) лінкує частоту/гарячих отримувачів через усіх юзерів — без реверсу pepper. План визнає лише reverse-on-pepper-leak.
+- *Мітигація:* per-record salt (зберігати) або включити `callerIdentityId` у pre-image; задокументувати residual equality-oracle у `shared-bot.md`.
+
+**🟠 W25. Крос-тенант через внутрішній стан спільного signal-cli (окремо від G9).**
+- *Ризик:* один daemon / один `--config`-том, signal-cli НЕ ізолює акаунти. Лінкований own-number юзера зберігає contacts/groups/profile-key у спільному сторі; daemon-внутрішній cross-account sync/contact-merge/profile-key-sharing може сурфейснути дані A через запит, легітимно авторизований для іншого акаунта. App-фільтр (account-level) структурно не дістає **всередину** daemon. G9 — shared-bot `listGroups`; це **own-number** leak через daemon-стан.
+- *Мітигація:* per-account storage-ізоляція (окремий `--config` на own-number, або daemon-per-tenant), АБО емпіричний аудит + задокументований accepted-risk; app-фільтрування = necessary-but-insufficient.
+
 ## Глобальний Definition of Done (для КОЖНОЇ фази)
 
 Фаза не закрита, поки не виконані всі три умови:
