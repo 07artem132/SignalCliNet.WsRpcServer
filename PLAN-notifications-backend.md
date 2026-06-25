@@ -72,6 +72,7 @@ WsRpcServer — **тільки транспорт Signal-каналу** унів
 - *Ризик:* Kestrel прямо в інтернет = жодного SYN/TLS-handshake/accept-rate скрабінгу перед застосунком. Прикладні per-IP/per-token cap не рятують від вичерпання FD/CPU на хендшейках.
 - *Доказ:* «Уточнення» п.5 фіксує no-proxy; фреймворк дає лише глобальний `MaxConcurrentConnections` (`Core/JsonRpcServerConfig.cs:114`) — це не L4-захист.
 - *Мітигація:* задокументувати як accepted-risk + ЗОВНІШНІЙ L4-фаєрвол/conn-rate-ліміт на хості (nftables/cloud SG) як передумову публічного біндингу; не світити «голим». Якщо неприйнятно — повернути ingress (тоді й проксі-скрабінг субпротокол-токена з «Уточнення» п.5).
+- *Вфолджено (U1, рішення 2026-06-25):* **frame-accumulation DoS-тріада** (frame-assembly-abort / max-frame-count / assembly-timeout-slowloris) сюди ж — структурно НЕ app-side і не фікситься bump'ом JSON-RPC.NET (gap у NetCoreServer нижче `OnWsReceived`). Та сама accepted-risk + L4-позиція; post-assembly 64KB-cap лишається дешевим частковим захистом; reverse-proxy/WAF з WS-frame-лімітами — якщо зʼявиться ingress. Опційно (non-blocking): NetCoreServer-upstream-issue. Прибрати ці пункти з Phase-2/3 **app**-task-листів (msg-row / task-5 §5) — це не in-repo app-робота.
 
 **🔴 D6. Інтеграційний ризик: NetCoreServer handshake-reject seam.**
 - *Ризик:* увесь auth-хендшейк плану (читати `Sec-WebSocket-Protocol`/`Origin` на upgrade, **401 ДО апгрейду**, echo лише non-auth субпротоколу) залежить від того, чи NetCoreServer дає (а) відхилити upgrade на рівні HTTP, (б) керувати вибраним субпротоколом. Якщо ні — дизайн хендшейка переробляється (fallback на first-message `authenticate`).
@@ -466,6 +467,53 @@ WsRpcServer — **тільки транспорт Signal-каналу** унів
 - **Невирішені план-внутрішні рішення для власника (не код-баги, а вибори):** W13 (G3⊥G11 — обрати режим), W14/W16/W17 (PoP-latency-бюджет / єдине admission-rule / пропорційність auth-стеку), U1-тегування (accepted-risk vs upstream-контриб), N3/N4 (DoD-власники для G11 та W13-W17).
 - **Keystone-знахідки, що тримаються:** A1/A2 (serializer reflection-fallback воїдить «реєструй кожен DTO»; ConsoleTraceListener param-firehose сьогодні) 🔴; C1 (device-key мусить бути IndexedDB) 🔴; W13/W20 🔴; W4 (обсяг task-0) 🔴.
 
+### Рішення власника — закриття W13 / W14 / W16 / W17 / U1 / N3 / N4 (2026-06-25)
+
+Сім відкритих план-внутрішніх виборів закрито. Формат: **Рішення** / *Чому* / *Власник (task + DoD)* / *Відхилено*.
+
+**W13 (G3 ⊥ G11) → РІШЕННЯ: reserve-then-send (block-reservation) — розчіпити atomicity і durability.**
+- План конфляував дві окремі гарантії; розділяємо:
+  - *Race-safety (G3):* in-memory атомарний лічильник під lock (або `Interlocked` / `UPDATE…WHERE n>0`) — на кожен send, **без DB**.
+  - *Crash-safety / анти-бан (Уточнення-6):* durable persist НЕ на кожен send, а **блоками** — одним атомарним durable-записом «зарезервувати» K одиниць (`UPDATE budget SET reserved=reserved+K WHERE remaining>=K`), витрачати з in-memory-блоку; новий запис лише на вичерпанні блоку / короткому таймері.
+  - *Restart:* cold-start з durable `reserved/consumed`; невитрачений залишок блоку **форфейтиться** (= недосил, fail-safe; ніколи не re-spend → нуль over-send).
+- *Чому:* «persist ДО send» виконано на гранулярності **блоку**, не send → анти-бан-інваріант (нуль over-send) збережено; G11-throughput знятий (1 DB-запис на K send). K — тюнінг (менший = менший форфейт на краш, більше записів; дефолт K≈max(10, бюджет/20)).
+- *Власник:* Phase-2 task-5; DoD доповнити «краш форфейтить ≤K, ніколи не over-send; reservation-RMW атомарний» (поряд із наявним G3-concurrency DoD).
+- *Відхилено:* чистий coalesce-on-timer (G11) — ламає persist-before-send; чистий per-send-durable (G3 буквально) — throughput-bottleneck (G11).
+
+**W14 (connect-on-demand vs PoP-per-connect латентність) → РІШЕННЯ: PoP — per-CONNECTION, не per-notification; burst-reuse у межах SW-wake; cold-connect-латентність прийняти.**
+- Уточнення-1 «close на нотіф» **пом'якшуємо** до «close на SW-idle / після дренажу burst'у». MV3 SW живе ~30с і батчить нотіфи в одному wake → **один PoP на сокет**, амортизований на ввесь burst, не на кожну нотіф.
+- TLS 1.3 session-resumption tickets — дешевий серверний add, що зрізає repeat-handshake між wake'ами.
+- Залишкову латентність одиничного cold-connect **приймаємо** (нотіфи її толерують; correctness > latency).
+- *Власник:* Phase-3 task-3 (connection-contract); DoD «PoP раз на сокет; burst у межах wake переюзає authed-сокет (не re-PoP на кожну нотіф)».
+- *Зв'язок:* C2 (idempotency-key) лишається обов'язковим — burst-reuse не скасовує at-most-once MV3.
+
+**W16 (звести лімітери в одне admission-rule) → РІШЕННЯ: одна впорядкована admission-функція на chokepoint, short-circuit на першому deny.**
+```
+admit(principal, account, recipient):
+  1. global_pause (Phase-3, реакція на -5/-6)? → DENY 4429 retry_after        # safety-first, найзовнішніший
+  2. account == shared_bot:
+       a. per_user_quota[principal] вичерпано? → DENY -32005                   # fairness-floor (G2)
+       b. new_recipient_window над лімітом нових контактів? → THROTTLE          # D2 анти-first-contact-бан
+       c. aggregate_bot_budget reserve-1 (схема W13) вичерпано? → DENY 4429     # анти-бан-обсяг
+  3. account ∈ власні caller: лише per_user_quota                              # власний номер, без shared анти-бану
+  ALLOW
+```
+- *Чому порядок такий:* per-user **перед** aggregate → один юзер не дренажить aggregate за межі свого floor (закриває G2-starvation). Калібровка: Σ(per_user_floor) ≤ aggregate; burst-над-floor лише за наявності aggregate-headroom (fair-share). D2-new-recipient вфолджено як крок (b); global-pause — зовнішній gate.
+- *Власник:* Phase-2 task-1 (функція живе на chokepoint); DoD «єдине admission-rule; per-user floor спрацьовує під aggregate (не starvation); D2-new-recipient throttle окремо від обсягу».
+
+**W17 (пропорційність auth-стеку vs «бот=відкрите реле») → РІШЕННЯ: явно розділити threat-model; стек тримаємо, recipient-abuse НЕ gold-plate-имо.**
+- Auth-стек (token/PoP/invite/isolation/budget) пропорційний **чотирьом** загрозам: (1) privacy власного номера (причина обов'язкової ізоляції), (2) takeover бот-акаунта (лінк девайсів — лише admin), (3) виживання бота в Signal (budget/quota ріже обсяг), (4) Sybil/неавтентиф. абʼюз (invite-gating обмежує, хто взагалі юзає бота).
+- Recipient-abuse (автентиф. юзер → довільний E.164) — **окремий, явно прийнятий** residual: per-user quota + abuse-log + invite-cost (вже в плані) + опційний per-user recipient-opt-in як майбутній тогл. **Без** per-recipient proof-of-ownership (bot-модель це вже прийняла).
+- *Власник:* Phase-2 task-12 (`shared-bot.md`); DoD «shared-bot.md явно розділяє: стек = захист isolation/takeover/ban/Sybil; recipient-abuse = accepted residual + cheap-мітигації + регламент скарг».
+
+**U1 (frame-DoS-тріада) → РІШЕННЯ: пере-тегнути на accepted-risk + зовнішній L4 (вфолдити у D5); прибрати з app-task-листів.**
+- Нема app-seam'у, не фікситься bump'ом JSON-RPC.NET (gap у NetCoreServer). MVP: accept-risk + **зовнішній L4** (nftables/cloud-SG conn-rate; reverse-proxy/WAF з WS-frame-лімітами за наявності ingress) — позиція D5. Post-assembly 64KB-cap (app-side, вже є) — дешевий частковий захист. Опційно (non-blocking): NetCoreServer-upstream-issue.
+- *Власник:* перенести frame-assembly/slowloris-пункт з Phase-2 task-5 у **D5-accepted-risk** + ops-runbook (Phase-3 task-8); відповідний Phase-2 DoD-рядок замінити на «L4-передумова задокументована» (нижче, інлайн у D5).
+
+**N3 (G11 без DoD) → ЗАКРИТО W13-рішенням + perf-gate DoD.** Reservation-схема знімає per-send DB-write; додати Phase-3 perf-gate DoD «sustained send-rate не впирається в budget-persist (1 запис на K send); виміряти writes/sec під навантаженням». *Власник:* Phase-3 task-4.
+
+**N4 (W13-W17 без власника) → ЗАКРИТО маршрутизацією вище:** W13→task-5, W14→Phase-3 task-3, W16→task-1, W17→task-12, кожне з DoD-рядком. Більше не «висить».
+
 ## Глобальний Definition of Done (для КОЖНОЇ фази)
 
 Фаза не закрита, поки не виконані всі три умови:
@@ -635,7 +683,7 @@ Outbound interceptor: `AccountQuery` → `FilterReadOutputAsync(principal, respo
 - [ ] **Link:** `finishLink` токеном B на сесію A → помилка, конфіг пристроїв A не змінено; повторний `finishLink` тим самим `SessionID` (у межах 120c) → відмова (one-time); сесія A **не знищена** спробою B (анти-griefing).
 - [ ] **Token TTL:** RPC з простроченим токеном → auth-помилка без бізнес-логіки.
 - [ ] **Echo-leak:** upgrade підтверджує лише non-auth субпротокол; токен НІКОЛИ не в заголовках відповіді.
-- [ ] **Msg-size/DoS:** пакет >64KB → обрив під час накопичення фреймів; стиснутий zip-bomb-фрейм не роздуває памʼять; partial-frame/slowloris → таймаут збірки рве сокет.
+- [ ] **Msg-size/DoS:** зібране повідомлення >64KB → `MessageTooBig`-обрив (app-side `MaxMessageSizeBytes`, опущений до 64KB). **(U1-рішення:** frame-assembly-abort / max-frame-count / assembly-timeout-slowloris **НЕ app-side** → винесено в D5-accepted-risk + L4-передумова задокументована; permessage-deflate не підтримується (V6) → zip-bomb-ампліфікація неможлива.)**
 - [ ] **Auth-timeout:** fallback-сокет без auth за N c → примусове закриття; per-IP cap неавтентиф. сокетів спрацьовує.
 - [ ] **PoP:** replay вкраденим токеном без device-ключа (інший пристрій) → відмова на connect.
 - [ ] **Revoke-каскад:** після revoke identity device-секрет мертвий — мовчазний re-issue не проходить.
