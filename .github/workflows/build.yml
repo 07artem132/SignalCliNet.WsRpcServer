@@ -1,0 +1,102 @@
+name: CI
+
+# Build + test gate для SignalCliNet.WsRpcServer.
+#
+# Три upstream-пакети (SignalCli.NET, JSON-RPC.NET, SignalCli.Runtime) лежать у GitHub
+# Packages NuGet-реєстрі. Важливо: реєстр GitHub Packages для NuGet вимагає автентифікації
+# навіть для пакетів із ПУБЛІЧНИХ репо (анонімний restore → 401). Тому два шляхи:
+#   1) FAST: автентифікований restore через авто GITHUB_TOKEN (packages: read).
+#   2) FALLBACK (якщо немає доступу до пакетів): зібрати sibling-source у локальний feed —
+#      нуль зовнішніх токенів, повністю self-contained (качає signal-cli + JDK payload).
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+
+      - name: Install .NET 10 SDK
+        uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5.2.0
+        with:
+          dotnet-version: 10.0.x
+
+      # --- FAST path: автентифікований GitHub Packages feed (джерело `github` уже в NuGet.Config) ---
+      # Переважно PAT власника (secrets.NUGET_READ_TOKEN, read:packages) — читає пакети з усіх
+      # репо власника без per-repo grant'ів. Якщо секрета нема — fallback на вбудований GITHUB_TOKEN
+      # (працює лише якщо sibling-пакети надали доступ цьому репо; інакше спрацює sibling-build нижче).
+      - name: Authenticate GitHub Packages feed
+        env:
+          NUGET_TOKEN: ${{ secrets.NUGET_READ_TOKEN || secrets.GITHUB_TOKEN }}
+        run: >
+          dotnet nuget update source github
+          --username ${{ github.repository_owner }}
+          --password "$NUGET_TOKEN"
+          --store-password-in-clear-text
+          --configfile NuGet.Config
+
+      - name: Restore (GitHub Packages)
+        id: restore_ghp
+        continue-on-error: true
+        run: dotnet restore SignalCliNet.WsRpcServer.sln
+
+      # --- FALLBACK: build sibling-source у локальний feed (лише якщо FAST restore не вдався) ---
+      - name: Checkout JSON-RPC.NET (fallback)
+        if: steps.restore_ghp.outcome == 'failure'
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          repository: 07artem132/json-rpc.net
+          path: _deps/JSON-RPC.NET
+
+      - name: Checkout SignalCli.NET (fallback)
+        if: steps.restore_ghp.outcome == 'failure'
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          repository: 07artem132/signalcli.net
+          path: _deps/SignalCli.NET
+
+      - name: Build local feed + restore (fallback)
+        if: steps.restore_ghp.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          JSONRPC_REPO="$PWD/_deps/JSON-RPC.NET" \
+          SIGNALCLI_REPO="$PWD/_deps/SignalCli.NET" \
+            bash deploy/build-local-feed.sh "$PWD/.localfeed"
+          dotnet restore SignalCliNet.WsRpcServer.sln \
+            --configfile deploy/nuget.ci-localfeed.config -p:NuGetAudit=false
+
+      # --- Build + test (обидва шляхи сходяться сюди; пакети вже restore'нуті) ---
+      - name: NuGet vulnerability audit gate
+        run: |
+          set -euo pipefail
+          dotnet list SignalCliNet.WsRpcServer.sln package --vulnerable --include-transitive 2>&1 | tee audit.txt
+          if grep -q "has the following vulnerable packages" audit.txt; then
+            echo "::error::Знайдено вразливі NuGet-пакети — див. лог вище."
+            exit 1
+          fi
+
+      - name: Build (Release)
+        run: dotnet build SignalCliNet.WsRpcServer.sln -c Release --no-restore
+
+      - name: Test (Release)
+        run: >
+          dotnet test tests/SignalCliNet.WsRpcServer.Tests/SignalCliNet.WsRpcServer.Tests.csproj
+          -c Release --no-build

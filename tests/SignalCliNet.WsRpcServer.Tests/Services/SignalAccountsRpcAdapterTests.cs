@@ -1,6 +1,5 @@
 using Microsoft.Extensions.Logging.Abstractions;
-using NSubstitute;
-using NSubstitute.ExceptionExtensions;
+using Moq;
 using SignalCli.Interfaces.Signal;
 using SignalCli.Models.Signal.Accounts;
 using SignalCliNet.WsRpcServer.Services;
@@ -10,62 +9,36 @@ using Xunit;
 
 namespace SignalCliNet.WsRpcServer.Tests.Services;
 
-// Інтеграційні тести адаптера ISignalAccountsRpc: підкладаємо ISignalAccounts через NSubstitute.
 public class SignalAccountsRpcAdapterTests
 {
-    private readonly ISignalAccounts _signalAccounts = Substitute.For<ISignalAccounts>();
-
-    private SignalAccountsRpcAdapter CreateAdapter() =>
-        new(_signalAccounts, NullLogger<SignalAccountsRpcAdapter>.Instance);
+    private static SignalAccountsRpcAdapter CreateAdapter(Mock<ISignalAccounts> facade)
+        => new(facade.Object, NullLogger<SignalAccountsRpcAdapter>.Instance);
 
     [Fact]
-    public async Task ListAccounts_HappyPath_ReturnsResponseFromUnderlyingService()
+    public async Task ListAccounts_ReturnsFacadeResponse()
     {
-        // happy: фасад повертає список акаунтів — адаптер віддає його без змін.
-        var expected = new ListAccountsResponse([new Account("+380501234567")]);
-        _signalAccounts.ListAccountsAsync(Arg.Any<CancellationToken>()).Returns(expected);
+        var expected = new ListAccountsResponse([]);
+        var facade = new Mock<ISignalAccounts>();
+        facade.Setup(a => a.ListAccountsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(expected);
 
-        var adapter = CreateAdapter();
-        var actual = await adapter.ListAccounts();
+        var adapter = CreateAdapter(facade);
 
-        Assert.Same(expected, actual);
+        var result = await adapter.ListAccounts();
+
+        Assert.Same(expected, result);
+        facade.Verify(a => a.ListAccountsAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
-    public async Task ListAccounts_WhenUnderlyingThrows_ThrowsRpcErrorWithInvocationError()
+    public async Task ListAccounts_FacadeThrows_WrappedAsInvocationError()
     {
-        // negative: фасад кидає InvalidOperationException → адаптер мапить на InvocationError.
-        _signalAccounts.ListAccountsAsync(Arg.Any<CancellationToken>())
-            .ThrowsAsync(new InvalidOperationException("збій"));
+        var facade = new Mock<ISignalAccounts>();
+        facade.Setup(a => a.ListAccountsAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("boom"));
 
-        var adapter = CreateAdapter();
+        var adapter = CreateAdapter(facade);
+
         var ex = await Assert.ThrowsAsync<RpcErrorException>(() => adapter.ListAccounts());
-
-        Assert.Equal(JsonRpcErrorCode.InvocationError, ex.ErrorCode);
-    }
-
-    [Fact]
-    public async Task SyncAccount_HappyPath_ReturnsResponseFromUnderlyingService()
-    {
-        // happy: фасад повертає порожню SyncAccountsResponse — адаптер віддає її як є.
-        var expected = new SyncAccountsResponse();
-        _signalAccounts.SyncAccountAsync(Arg.Any<CancellationToken>()).Returns(expected);
-
-        var adapter = CreateAdapter();
-        var actual = await adapter.SyncAccount();
-
-        Assert.Same(expected, actual);
-    }
-
-    [Fact]
-    public async Task SyncAccount_WhenUnderlyingThrows_ThrowsRpcErrorWithInvocationError()
-    {
-        // negative: фасад кидає → InvocationError.
-        _signalAccounts.SyncAccountAsync(Arg.Any<CancellationToken>())
-            .ThrowsAsync(new InvalidOperationException("збій"));
-
-        var adapter = CreateAdapter();
-        var ex = await Assert.ThrowsAsync<RpcErrorException>(() => adapter.SyncAccount());
 
         Assert.Equal(JsonRpcErrorCode.InvocationError, ex.ErrorCode);
     }

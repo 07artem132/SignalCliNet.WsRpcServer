@@ -3,13 +3,18 @@ using Xunit;
 
 namespace SignalCliNet.WsRpcServer.Tests.Configuration;
 
-// Phase-1 DoD: пінуємо припущення "send-only / manual receive" (task-7 no-op підтвердження).
+/// <summary>
+/// Пінить передумову send-only MVP: signal-cli стартує у <c>--receive-mode=manual</c> з коробки,
+/// бо <see cref="SignalCliOptions.UseManualReceiveMode"/> default = <c>true</c>, а
+/// <c>Program.cs</c> його НЕ перевизначає. Якщо майбутній bump SignalCli.NET інвертує дефолт —
+/// цей тест впаде, нагадавши, що демон почне eager-receive за всі акаунти.
+/// (Phase-2 group-claim згодом свідомо вмикає авто-receive — R3.1.)
+/// </summary>
 public class ReceiveModeDefaultTests
 {
     [Fact]
-    public void SignalCliOptions_ByDefault_UsesManualReceiveMode()
+    public void SignalCliOptions_DefaultsToManualReceiveMode()
     {
-        // За замовчуванням SignalCliOptions має бути у ручному режимі отримання.
         var options = new SignalCliOptions();
 
         Assert.True(options.UseManualReceiveMode);

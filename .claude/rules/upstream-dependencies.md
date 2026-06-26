@@ -14,7 +14,7 @@ the single most important fact for editing it safely.
 | Concern | Lives in | Surface here |
 |---|---|---|
 | signal-cli process launch/supervise/health, typed Signal API, incoming events | **SignalCli.NET** (4.10.0) | `AddSignalCli(...)` + `AddSignalEvents()` in `Program.cs`; consumed by the `Signal*RpcAdapter`s |
-| WebSocket transport, JSON-RPC 2.0 correlation, abstract base classes, service discovery | **JSON-RPC.NET / WsRpcServer** (1.1.0) | `AddJsonRpcCore(...)` via `AddSignalJsonRpc`; the `Abstract*` subclasses (`SignalRpcServer`, `SignalRpcSession`, `RpcServiceRegistry`, `EventProcessor`, `SubscriptionManager`) |
+| WebSocket transport, JSON-RPC 2.0 correlation, abstract base classes, service discovery | **JSON-RPC.NET / WsRpcServer** (2.7.0) | `AddJsonRpcCore(...)` via `AddSignalJsonRpc`; the `Abstract*` subclasses (`SignalRpcServer`, `SignalRpcSession`, `RpcServiceRegistry`, `EventProcessor`, `SubscriptionManager`) |
 | signal-cli + JDK 25 payload | **SignalCli.Runtime** (0.14.3.1) | staged into output by its `.targets`; published via the `CopySignalCliToPublish` MSBuild target |
 
 ## Rules

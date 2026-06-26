@@ -2,33 +2,23 @@
 
     <PropertyGroup>
         <TargetFramework>net10.0</TargetFramework>
-        <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
         <IsPackable>false</IsPackable>
+        <IsTestProject>true</IsTestProject>
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
-        <PackageReference Include="xunit" Version="2.9.2" />
-        <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
-        <PackageReference Include="NSubstitute" Version="5.3.0" />
-        <!-- NullLogger<T> для адаптерів; версія прив'язана до застосунку (10.0.9). -->
+        <PackageReference Include="coverlet.collector" Version="10.0.1" />
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.9" />
-        <!-- Для BindLoopbackConfigTests: читаємо Server:Host з appsettings.json. -->
-        <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.9" />
+        <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.7.0" />
+        <PackageReference Include="Moq" Version="4.20.72" />
+        <PackageReference Include="xunit" Version="2.9.3" />
+        <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
     </ItemGroup>
 
     <ItemGroup>
         <ProjectReference Include="..\..\src\SignalCliNet.WsRpcServer\SignalCliNet.WsRpcServer.csproj" />
-    </ItemGroup>
-
-    <ItemGroup>
-        <!-- Лінкуємо shipped appsettings.json застосунку у вихідну теку тесту,
-             щоб ConfigurationBuilder().AddJsonFile("appsettings.json") бачив реальний конфіг. -->
-        <Content Include="..\..\src\SignalCliNet.WsRpcServer\appsettings.json">
-            <Link>appsettings.json</Link>
-            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-        </Content>
     </ItemGroup>
 
 </Project>

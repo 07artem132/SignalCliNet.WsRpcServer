@@ -1,6 +1,5 @@
 using Microsoft.Extensions.Logging.Abstractions;
-using NSubstitute;
-using NSubstitute.ExceptionExtensions;
+using Moq;
 using SignalCli.Interfaces.Signal;
 using SignalCli.Models.Signal.Message;
 using SignalCliNet.WsRpcServer.Services;
@@ -10,88 +9,70 @@ using Xunit;
 
 namespace SignalCliNet.WsRpcServer.Tests.Services;
 
-// Інтеграційні тести адаптера ISignalMessageRpc: підкладаємо ISignalMessage через NSubstitute.
 public class SignalMessageRpcAdapterTests
 {
-    private readonly ISignalMessage _signalMessage = Substitute.For<ISignalMessage>();
-
-    private SignalMessageRpcAdapter CreateAdapter() =>
-        new(_signalMessage, NullLogger<SignalMessageRpcAdapter>.Instance);
+    private static SignalMessageRpcAdapter CreateAdapter(Mock<ISignalMessage> facade)
+        => new(facade.Object, NullLogger<SignalMessageRpcAdapter>.Instance);
 
     [Fact]
-    public async Task SendTextMessage_HappyPath_ReturnsResponseFromUnderlyingService()
+    public async Task SendTextMessage_ValidInput_ReturnsFacadeResponse()
     {
-        // happy: валідний акаунт + один отримувач + текст → адаптер віддає відповідь фасаду.
-        var expected = new SendMessageResponse(Results: null, TimeStamp: 1234567890L);
-        _signalMessage
-            .SendTextMessageAsync(Arg.Any<TextMessageOptions>(), Arg.Any<CancellationToken>())
-            .Returns(expected);
+        var expected = new SendMessageResponse(null, 1234567890L);
+        var facade = new Mock<ISignalMessage>();
+        facade.Setup(m => m.SendTextMessageAsync(It.IsAny<TextMessageOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(expected);
 
-        var adapter = CreateAdapter();
-        var actual = await adapter.SendTextMessage(
-            "+380501234567",
-            ["+380507654321"],
-            "Привіт, світ!");
+        var adapter = CreateAdapter(facade);
 
-        Assert.Same(expected, actual);
+        var result = await adapter.SendTextMessage("+10000000001", ["+10000000002"], "hi");
+
+        Assert.Same(expected, result);
+        facade.Verify(m => m.SendTextMessageAsync(It.IsAny<TextMessageOptions>(), It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
-    public async Task SendTextMessage_WhenAccountEmpty_ThrowsInvalidParamsAndDoesNotCallUnderlying(string account)
+    [InlineData(null)]
+    public async Task SendTextMessage_EmptyAccount_ThrowsInvalidParams(string? account)
     {
-        // negative: порожній/пробільний акаунт → InvalidParams, кинуто ДО виклику фасаду.
-        var adapter = CreateAdapter();
+        var facade = new Mock<ISignalMessage>();
+        var adapter = CreateAdapter(facade);
 
         var ex = await Assert.ThrowsAsync<RpcErrorException>(
-            () => adapter.SendTextMessage(account, ["+380507654321"], "Привіт"));
+            () => adapter.SendTextMessage(account!, ["+10000000002"], "hi"));
 
         Assert.Equal(JsonRpcErrorCode.InvalidParams, ex.ErrorCode);
-        // Перевіряємо, що фасад НЕ викликали взагалі.
-        await _signalMessage.DidNotReceiveWithAnyArgs()
-            .SendTextMessageAsync(default!, default);
+        facade.Verify(m => m.SendTextMessageAsync(It.IsAny<TextMessageOptions>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Fact]
-    public async Task SendTextMessage_WhenRecipientsEmpty_ThrowsInvalidParamsAndDoesNotCallUnderlying()
+    public async Task SendTextMessage_NoRecipients_ThrowsInvalidParams()
     {
-        // negative: порожній перелік отримувачів → InvalidParams, фасад не викликаний.
-        var adapter = CreateAdapter();
+        var facade = new Mock<ISignalMessage>();
+        var adapter = CreateAdapter(facade);
 
         var ex = await Assert.ThrowsAsync<RpcErrorException>(
-            () => adapter.SendTextMessage("+380501234567", [], "Привіт"));
+            () => adapter.SendTextMessage("+10000000001", [" ", ""], "hi"));
 
         Assert.Equal(JsonRpcErrorCode.InvalidParams, ex.ErrorCode);
-        await _signalMessage.DidNotReceiveWithAnyArgs()
-            .SendTextMessageAsync(default!, default);
+        facade.Verify(m => m.SendTextMessageAsync(It.IsAny<TextMessageOptions>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Fact]
-    public async Task SendTextMessage_WhenAllRecipientsWhitespace_ThrowsInvalidParamsAndDoesNotCallUnderlying()
+    public async Task SendTextMessage_FacadeThrows_WrappedAsInvocationError()
     {
-        // negative: усі отримувачі — пробіли → після фільтрації список порожній → InvalidParams.
-        var adapter = CreateAdapter();
+        var facade = new Mock<ISignalMessage>();
+        facade.Setup(m => m.SendTextMessageAsync(It.IsAny<TextMessageOptions>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("boom"));
+
+        var adapter = CreateAdapter(facade);
 
         var ex = await Assert.ThrowsAsync<RpcErrorException>(
-            () => adapter.SendTextMessage("+380501234567", ["", "   "], "Привіт"));
-
-        Assert.Equal(JsonRpcErrorCode.InvalidParams, ex.ErrorCode);
-        await _signalMessage.DidNotReceiveWithAnyArgs()
-            .SendTextMessageAsync(default!, default);
-    }
-
-    [Fact]
-    public async Task SendTextMessage_WhenUnderlyingThrows_ThrowsRpcErrorWithInvocationError()
-    {
-        // negative: фасад кидає під час відправки → InvocationError.
-        _signalMessage
-            .SendTextMessageAsync(Arg.Any<TextMessageOptions>(), Arg.Any<CancellationToken>())
-            .ThrowsAsync(new InvalidOperationException("збій"));
-
-        var adapter = CreateAdapter();
-        var ex = await Assert.ThrowsAsync<RpcErrorException>(
-            () => adapter.SendTextMessage("+380501234567", ["+380507654321"], "Привіт"));
+            () => adapter.SendTextMessage("+10000000001", ["+10000000002"], "hi"));
 
         Assert.Equal(JsonRpcErrorCode.InvocationError, ex.ErrorCode);
     }

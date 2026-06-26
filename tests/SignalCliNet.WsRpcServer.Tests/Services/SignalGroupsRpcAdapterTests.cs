@@ -1,6 +1,5 @@
 using Microsoft.Extensions.Logging.Abstractions;
-using NSubstitute;
-using NSubstitute.ExceptionExtensions;
+using Moq;
 using SignalCli.Interfaces.Signal;
 using SignalCli.Models.Signal.Groups;
 using SignalCliNet.WsRpcServer.Services;
@@ -10,51 +9,51 @@ using Xunit;
 
 namespace SignalCliNet.WsRpcServer.Tests.Services;
 
-// Інтеграційні тести адаптера ISignalGroupsRpc: підкладаємо ISignalGroups через NSubstitute.
 public class SignalGroupsRpcAdapterTests
 {
-    private readonly ISignalGroups _signalGroups = Substitute.For<ISignalGroups>();
-
-    private SignalGroupsRpcAdapter CreateAdapter() =>
-        new(_signalGroups, NullLogger<SignalGroupsRpcAdapter>.Instance);
+    private static SignalGroupsRpcAdapter CreateAdapter(Mock<ISignalGroups> facade)
+        => new(facade.Object, NullLogger<SignalGroupsRpcAdapter>.Instance);
 
     [Fact]
-    public async Task ListGroups_HappyPath_ReturnsResponseFromUnderlyingService()
+    public async Task ListGroups_ValidAccount_ReturnsFacadeResponse()
     {
-        // happy: фасад повертає список груп — адаптер віддає його без змін.
         var expected = new ListGroupsResponse([]);
-        _signalGroups.ListGroupsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(expected);
+        var facade = new Mock<ISignalGroups>();
+        facade.Setup(g => g.ListGroupsAsync("+10000000001", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(expected);
 
-        var adapter = CreateAdapter();
-        var actual = await adapter.ListGroups("+380501234567");
+        var adapter = CreateAdapter(facade);
 
-        Assert.Same(expected, actual);
+        var result = await adapter.ListGroups("+10000000001");
+
+        Assert.Same(expected, result);
     }
 
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
-    public async Task ListGroups_WhenAccountEmpty_ThrowsInvalidParamsAndDoesNotCallUnderlying(string account)
+    [InlineData(null)]
+    public async Task ListGroups_EmptyAccount_ThrowsInvalidParams(string? account)
     {
-        // negative: порожній/пробільний акаунт → InvalidParams, кинуто ДО виклику фасаду.
-        var adapter = CreateAdapter();
+        var facade = new Mock<ISignalGroups>();
+        var adapter = CreateAdapter(facade);
 
-        var ex = await Assert.ThrowsAsync<RpcErrorException>(() => adapter.ListGroups(account));
+        var ex = await Assert.ThrowsAsync<RpcErrorException>(() => adapter.ListGroups(account!));
 
         Assert.Equal(JsonRpcErrorCode.InvalidParams, ex.ErrorCode);
-        await _signalGroups.DidNotReceiveWithAnyArgs().ListGroupsAsync(default!, default);
+        facade.Verify(g => g.ListGroupsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
-    public async Task ListGroups_WhenUnderlyingThrows_ThrowsRpcErrorWithInvocationError()
+    public async Task ListGroups_FacadeThrows_WrappedAsInvocationError()
     {
-        // negative: фасад кидає → InvocationError.
-        _signalGroups.ListGroupsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .ThrowsAsync(new InvalidOperationException("збій"));
+        var facade = new Mock<ISignalGroups>();
+        facade.Setup(g => g.ListGroupsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("boom"));
 
-        var adapter = CreateAdapter();
-        var ex = await Assert.ThrowsAsync<RpcErrorException>(() => adapter.ListGroups("+380501234567"));
+        var adapter = CreateAdapter(facade);
+
+        var ex = await Assert.ThrowsAsync<RpcErrorException>(() => adapter.ListGroups("+10000000001"));
 
         Assert.Equal(JsonRpcErrorCode.InvocationError, ex.ErrorCode);
     }
