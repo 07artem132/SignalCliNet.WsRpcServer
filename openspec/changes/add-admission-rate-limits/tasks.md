@@ -27,3 +27,4 @@
 - [ ] 5.3 Бюджет переживає рестарт; краш форфейтить ≤K, ніколи не over-send (W13)
 - [ ] 5.4 G6: флуд повільних send → cap тримає, pending не росте unbounded
 - [ ] 5.5 Msg >64KB → `MessageTooBig`; auth-timeout закриває неавтентиф. сокет
+- [ ] 5.6 Перевищення квоти → `-32005 data.retry_after` (in-band) / WS-close `4429`; браузерний клієнт бачить retry_after (S9)

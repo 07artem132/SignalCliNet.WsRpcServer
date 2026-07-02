@@ -1,7 +1,7 @@
 # Tasks: add-authn-token-pop
 
 ## 1. Token store + lifecycle
-- [ ] 1.1 Формат `ptzh_<ver>_<random≥256bit>_<checksum>`; HMAC pre-image = decoded random only (W18/D10) + round-trip тест-пін
+- [ ] 1.1 Формат `ptzh_<ver>_<random≥256bit>_<checksum>`; HMAC pre-image = decoded random only (W18/D10) + round-trip тест-пін; БЕЗ обіцянки «constant-time» index-lookup — модель = 256-bit ентропія (W19)
 - [ ] 1.2 Durable embedded DB: hash → identity, `ExpiresAt`/`IsRevoked`; lookup на кожен connect
 - [ ] 1.3 Ротація: новий токен + `IsRevoked=1` старого в одній транзакції; zero-overlap тест (W21)
 - [ ] 1.4 Revoke identity → каскад на токен + device-секрет атомарно; розрив живих конектів in-process

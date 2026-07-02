@@ -31,4 +31,6 @@
 - Код: `Sessions/SignalRpcSession.cs`, новий `Security/` (реєстр політик, guard, фільтр),
   `Serialization/SignalCliSerializerContext.cs`, тести.
 - Specs: `authz-isolation` (нова capability).
-- Прогалини: закриває S1 (суперечність G9-формулювань), S6 (D11 без власника); див. `openspec/GAPS.md`.
+- Прогалини: закриває S1 (суперечність G9-формулювань → R3.2, task 2.3/DoD 4.3),
+  S6 (D11 recipient-валідація — task 2.4/DoD 4.5), S7-частину (A4 teardown — task 1.4;
+  W22 outbound fail-closed + fault-injection — task 2.2); див. `openspec/GAPS.md`.

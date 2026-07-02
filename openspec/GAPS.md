@@ -121,12 +121,29 @@ Append-only формат звірок вичерпав себе: 7 ітерац�
 |---|---|---|
 | 🔴 | S3 | ✅ ЗАКРИТО — канон = mTLS client-cert bundle; token-шлях superseded (`add-invites-admin`) |
 | 🔴 | S8 | ✅ ЗАКРИТО — idempotency + server-heartbeat специфіковані в `add-ops-observability` (spec + tasks 3.2/3.3, DoD 5.3/5.4) |
-| 🟠 | S1, S2, S4, S5, S6, S7, S9 | закриваються канонізацією в changes (зроблено) + task-рядками |
+| 🟠 | S1, S2, S4, S5, S6, S7, S9 | ✅ ЗАКРИТО — аудит трасування пройдено (див. блок нижче): кожна має конкретний task + DoD-рядок |
 | 🟠 | S10 | ✅ ЗАКРИТО — entropy ≥96-bit / membership-churn / delegation-residual (`add-group-claim-receive`) |
 | 🟡 | S11 | ✅ ЗАКРИТО — per-account receive-роутер + W25 accepted-risk (`add-group-claim-receive`) |
 | 🟡 | S12 | ✅ ЗАКРИТО — `PLAN-*.md` заархівовано, «Поточний стан» оновлено, канон у `openspec/` |
+
+## Аудит трасування 🟠-групи (2026-07-02)
+
+Перевірено, що кожна прогалина має конкретний task + DoD-рядок у своїй зміні; виправлено
+знайдені дефекти трасування.
+
+| Gap | Канон | Task | DoD | Примітка аудиту |
+|---|---|---|---|---|
+| S1 | R3.2 (`listGroups` лише claim'нуті/власні, закриває G9) | authz-chokepoint 2.3 | 4.3 | ok |
+| S2 | R3.7 (платформний encrypted volume, НЕ app-LUKS) | secure-deploy 2.1 | 5.2 | ok |
+| S4 | R3.1 (безперервний авто-receive) | group-claim 1.1 | — | **fix:** додано `MODIFIED ws-jsonrpc-gateway` receive-mode delta (проposal обіцяв, spec бракував) |
+| S5 | U1/V3/V6 (frame-тріада → accepted-risk/L4; 64KB cap) | admission 3.1/3.4 | 5.5 | ok |
+| S6 | D11 recipient-валідація на chokepoint | authz-chokepoint 2.4 | 4.5 | **fix:** додано DoD 4.5; admission помилково цитував S6 замість S7 (D15) — виправлено |
+| S7 | пакет unowned-мітигацій | A4→chokepoint 1.4, W22→2.2, W21→authn 1.3, W19→authn 1.1, D15→admission 2.3, D17→deploy 1.4, W24→invites 3.3, N5→ops 2.1/2.3 | chokepoint 4.5, authn 4.x, ops 5.x | **fix:** chokepoint тепер цитує S7 (A4/W22); W19 отримав task-рядок |
+| S9 | in-band retry_after (`-32005`/`4429`) | admission 4.1 | 5.6 | **fix:** додано DoD 5.6 |
 
 Найсильніший загальний висновок: план **безпеково дуже зрілий** (7 проходів аудиту, більшість
 класичних дір уже знайдені й закриті рішеннями), але його **append-only форма стала джерелом
 нових дефектів** — чотири суперечності (а)-групи виникли саме тому, що рішення дописувались
 у кінець, а базові розділи не правились. Декомпозиція на specs/changes прибирає цей клас.
+
+**Стан S-серії: усі S1–S12 закриті** (рішення/task/DoD у відповідних changes; трасування звірено).

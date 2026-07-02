@@ -24,5 +24,6 @@ auth/idle-timeout, бот-бюджет — net-new (звірка №5). Чоти
 ## Вплив
 - Код: `Security/AdmissionControl`, budget store (durable), декоратор над `ISignalCliClient` (G6).
 - Specs: `admission-control` (нова capability).
-- Прогалини: закриває S6 (D15 без власника), S9 (in-band retry_after); фіксує S5
-  (frame-тріада винесена з app-задач — єдине канонічне формулювання).
+- Прогалини: закриває S7-частину (D15 монотонний годинник — task 2.3), S9 (in-band
+  retry_after — task 4.1, DoD 5.6); фіксує S5 (frame-тріада винесена з app-задач —
+  єдине канонічне формулювання, tasks 3.1/3.4).

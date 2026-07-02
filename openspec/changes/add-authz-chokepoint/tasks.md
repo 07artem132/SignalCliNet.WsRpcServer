@@ -22,3 +22,4 @@
 - [ ] 4.2 Inbound IDOR: A називає account B → відмова
 - [ ] 4.3 Outbound IDOR: `listAccounts`/`listGroups` A → лише A (+ admin-гілка R3.6)
 - [ ] 4.4 V8: два конекти різних identity не бачать стан одне одного через адаптер
+- [ ] 4.5 D11: malformed recipient (не-E.164 / битий group-ID) → відмова на chokepoint, у signal-cli не потрапляє (S6)

@@ -51,3 +51,15 @@ SHALL NOT логуватись чи зберігатись.
 ### Requirement: Non-blocking споживач
 Сканер SHALL бути окремим споживачем із drop-policy; його повільність SHALL NOT
 блокувати RPC-відповіді (head-of-line через спільний stdout-loop).
+
+## MODIFIED Requirements
+
+### Requirement: Receive-mode безперервний авто-receive
+Демон signal-cli SHALL стартувати в режимі безперервного авто-receive
+(`UseManualReceiveMode=false`, R3.1) — це скасовує send-only передумову V2 і потрібне,
+щоб код-сканер груп-claim матчив коди у вхідному потоці. Head-of-line-ефект спільного
+stdout-loop (Уточнення-3) SHALL зніматися окремим non-blocking споживачем.
+
+#### Scenario: авто-receive увімкнено
+- **WHEN** сервіс стартує з `add-group-claim-receive`
+- **THEN** демон безперервно ресивить; claim-коди з груп-чатів доходять до сканера без ручного receive
