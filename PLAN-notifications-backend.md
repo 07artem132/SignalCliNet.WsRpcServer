@@ -1,14 +1,22 @@
 # План: WsRpcServer → бекенд Signal-каналу для модуля сповіщень Потужності
 
+> **⚠️ АРХІВНИЙ ДОКУМЕНТ — журнал рішень, НЕ канон (GAPS S12).**
+> Канонічна, дедуплікована специфікація тепер живе в **`openspec/`**: as-built → `openspec/specs/`,
+> плановане → `openspec/changes/`. Нову роботу вести там; цей файл лишається як **історичне
+> обґрунтування** (серії рішень D/G/V/W/N/C/A/U/R/S, на які посилаються change-и). Його
+> append-only форма й породила чотири суперечності S1/S2/S4/S5 — тому редагувати тут більше
+> не варто, лише читати задля контексту. Стан прогалин — `openspec/GAPS.md`.
+
 ## Контекст і межі
 
 WsRpcServer — **генеричний WS JSON-RPC Signal-gateway** (R3.3): send + account/device/group + receive-for-codes. «Універсальний модуль сповіщень Потужності» — **один зі споживачів**, не єдиний; нижче написано з його перспективи, але сервіс consumer-agnostic. Детект подій (CREATED/UPDATED/DELETED, layer health, стрім-логи VEZHA, помилки обробки), підписки, UI, Chrome push, element — усе на боці розширення (Потужність). Цей сервер лише надійно шле в Signal та керує акаунтами/пристроями/групами.
 
-Поточний стан (станом на старт плану):
+Поточний стан (оновлено 2026-07-02 — Фаза 1 і task-0 **виконані**; текст нижче був «станом на старт плану» й тепер лише історичний):
 - Ядрові RPC-методи працюють end-to-end A→B: `listAccounts`, `startLink`, `finishLink`, `sendTextMessage`.
-- `ISignalGroupsRpc` / `SignalGroupsRpcAdapter` — написані, але **не зареєстровані в DI** (`Extensions/SignalRpcExtensions.cs`). **(Звірка-3 V7: код уже закоммічено `eca3852` — бракує ЛИШЕ DI-рядка, не «3 незакоммічені файли».)**
-- Хост standalone є (`Program.cs`, `0.0.0.0:9000`), signal-cli у JSON-RPC daemon-режимі через NuGet `SignalCli.NET 4.10.0`.
-- Тестів — **0**. Auth / ізоляції користувачів — **нема**.
+- ✅ `ISignalGroupsRpc` / `SignalGroupsRpcAdapter` — **зареєстровані в DI** (`Extensions/SignalRpcExtensions.cs:39`, `AddScoped<ISignalGroupsRpc, SignalGroupsRpcAdapter>`). *(Історично: Звірка-3 V7 — бракувало лише DI-рядка; його додано у Фазі 1.)*
+- Хост standalone є (`Program.cs`), signal-cli у JSON-RPC daemon-режимі через NuGet `SignalCli.NET 4.10.0`. Bind — **`127.0.0.1`** (loopback hardening Фази 1), не `0.0.0.0`.
+- ✅ task-0 виконано: `JSON-RPC.NET` **2.7.0** у csproj (міграція менеджера підписок на `*Core`). ✅ Тести + CI є (Фаза 1 DoD закрито); health-endpoint є; privacy-фікси A2/W6 внесені.
+- Auth / ізоляції користувачів **ще нема** — це NET-NEW робота Фази 2 (див. `openspec/changes/`).
 - База JSON-RPC.NET уже містить `Authorization/` (RpcAuthorizeAttribute, IRpcAuthorizationPolicy, StaticRoleMapAuthorizationPolicy), `Security/` (mTLS, NodeIdentity, TLS), connection quotas, `WsRpcServerDiagnostics` — **частково підключаємо, частково пишемо з нуля** (звірено з кодом, див. розділ «Звірка плану з кодом»). Конкретно: `[RpcAuthorize]` = deny-by-default **лише для атрибутованих** методів (НЕ герметичний default-deny — chokepoint net-new); principal — **лише з mTLS** (токен→principal net-new); connection quota — **лише ГЛОБАЛЬНА** `MaxConcurrentConnections` (per-IP / idle-timeout / auth-timeout — net-new); `MaxMessageSizeBytes` — **не читається ніде в сорсі (no-op)**, реальний msg-size-cap net-new.
 
 ## Уточнення з рев'ю (внесено)
