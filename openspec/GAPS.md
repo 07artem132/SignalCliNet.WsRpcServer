@@ -59,13 +59,15 @@ per-record salt), W19 (прибрати хибну «constant-time» обіця�
 → Розкладено по changes: chokepoint (A4, W22), authn (W21, W19), admission (D15),
 deploy (D17), invites-admin (W24), ops (V10/W10).
 
-**🔴 S8. Серверні половини consumer-контракту заявлені, але не заплановані.**
+**🔴 S8. Серверні половини consumer-контракту заявлені, але не заплановані. ✅ ЗАКРИТО.**
 R3.3 мандатує як генеричні серверні фічі: **idempotency-key/`messageId`** (C2) і
-**server-heartbeat <25с** (C5). Жодна задача Фаз 2/3 їх не імплементує (Phase-3 task-3 —
-docs-only). Без idempotency: MV3 at-most-once + ретраї клієнта → дубль-send АБО тихі втрати;
-взаємодія з бюджетом (ретрай не має декрементувати двічі) ніде не специфікована — це
+**server-heartbeat <25с** (C5). Спершу жодна задача Фаз 2/3 їх не імплементувала (Phase-3
+task-3 — docs-only). Без idempotency: MV3 at-most-once + ретраї клієнта → дубль-send АБО тихі
+втрати; взаємодія з бюджетом (ретрай не має декрементувати двічі) ніде не специфікована — це
 безпекова взаємодія з анти-бан-механікою, не лише UX.
-→ `add-ops-observability` tasks 3.2/3.3 + DoD 5.3.
+→ **ЗРОБЛЕНО:** `add-ops-observability` — tasks 3.2 (heartbeat) / 3.3 (idempotency), spec
+`operations` має Requirement «Idempotency send-шляху» (+ scenario дубль-ретрай) і Requirement
+«Server-heartbeat (persistent-WS)»; DoD 5.3 (idempotency) + 5.4 (heartbeat).
 
 ## (в) Нові логічні/безпекові прогалини
 
@@ -76,22 +78,32 @@ G13 фіксує одиниці/jitter, але не канал доставки.
 `-32005 data.retry_after` або close-reason `4429`; HTTP-гілка — лише для не-браузерних
 клієнтів. → `add-admission-rate-limits` task 4.1.
 
-**🟠 S10. Group-claim: три недоспецифіковані місця.**
+**🟠 S10. Group-claim: три недоспецифіковані місця. ✅ ЗАКРИТО.**
 (1) Ентропія/формат claim-коду не запінені (інвайти: ≥96-bit; клейми: «one-time, TTL 10 хв» —
 все). (2) Membership churn: юзер вийшов/вигнаний із G — binding U↔G живе далі; ex-member
 зберігає send-right у групу через бота безстроково (revocation покриває лише revoke identity
 і видалення бота з G). (3) Delegation-by-proxy: код, вставлений у G будь-ким (не U),
 грантить права U — соц-інженерний residual не задокументований.
-→ `add-group-claim-receive` tasks 0.1-0.3 (рішення до старту).
+→ **РІШЕННЯ (`add-group-claim-receive` tasks 0.1-0.3, spec `group-claim`):** (1) claim-код =
+**≥96-bit CSPRNG** (як інвайти); (2) **перевірка членства U ∈ G при кожному send** (primary) +
+**TTL binding'у** (backstop) → ex-member одразу втрачає send-right + binding інвалідується
+(Requirement «Валідність binding при зміні членства», DoD 4.6); (3) delegation-by-proxy —
+**accepted-risk**, код секретний до U й активує лише binding самого U (не грантить прав
+вставнику) → док у `docs/shared-bot.md`.
 
-**🟡 S11. R3.5-ізоляція incoming — інваріант без механізму.**
+**🟡 S11. R3.5-ізоляція incoming — інваріант без механізму. ✅ ЗАКРИТО.**
 «Повідомлення own-account юзера A ніколи не сурфейсити B» заявлено (R3.5/W25-inbound), але
 єдиний механізм у задачах — «сканер scoped до shared-bot». Phase-3 events-поверхня
 (`ISignalEventsRpc`, W5-асиметрія: discovery може підняти адаптер БЕЗ DI-рядка) отримає
 спільний notification-потік демона — потрібен per-account routing/filter на receive-шляху
 як окремий компонент, інакше інваріант тримається лише на «поверхні ще нема». W25
 (daemon-внутрішній cross-account стан) так і лишився «аудит АБО accepted-risk» без вибору.
-→ Врахувати при `add-ops-observability` 5.x / отдельному receive-events change.
+→ **РІШЕННЯ (`add-group-claim-receive`):** додано **per-account receive-роутер**
+(`account → owning-identity`) як єдиний вузол фанауту — own-linked → лише власнику,
+shared-bot → лише сканеру; усі consumer-и (вкл. Phase-3 subscribe) підписуються ЧЕРЕЗ роутер
+(Requirement «Per-account receive-роутер», tasks 1.4, DoD 4.7). **W25 → accepted-risk**:
+daemon-internal cross-account leak — відомий residual (док `docs/shared-bot.md`; own-number
+linking у спільний демон не рекомендувати), app-фільтр тримає ізоляцію на поверхні (task 1.5).
 
 **🟡 S12. План застарів відносно коду (доc-drift, не безпека). ✅ ЗАКРИТО.**
 «Поточний стан», V1-блокер, task-7-суперечка, «тестів 0» — уже неправда (див. шапку).
@@ -108,9 +120,10 @@ Append-only формат звірок вичерпав себе: 7 ітерац�
 | Severity | IDs | Статус |
 |---|---|---|
 | 🔴 | S3 | ✅ ЗАКРИТО — канон = mTLS client-cert bundle; token-шлях superseded (`add-invites-admin`) |
-| 🔴 | S8 | задачі додані в `add-ops-observability` (3.2 heartbeat / 3.3 idempotency, DoD 5.3) |
-| 🟠 | S1, S2, S4, S5, S6, S7, S9, S10 | закриваються канонізацією в changes (зроблено) + task-рядками |
-| 🟡 | S11 | зафіксовано; тримати на оці при receive/events |
+| 🔴 | S8 | ✅ ЗАКРИТО — idempotency + server-heartbeat специфіковані в `add-ops-observability` (spec + tasks 3.2/3.3, DoD 5.3/5.4) |
+| 🟠 | S1, S2, S4, S5, S6, S7, S9 | закриваються канонізацією в changes (зроблено) + task-рядками |
+| 🟠 | S10 | ✅ ЗАКРИТО — entropy ≥96-bit / membership-churn / delegation-residual (`add-group-claim-receive`) |
+| 🟡 | S11 | ✅ ЗАКРИТО — per-account receive-роутер + W25 accepted-risk (`add-group-claim-receive`) |
 | 🟡 | S12 | ✅ ЗАКРИТО — `PLAN-*.md` заархівовано, «Поточний стан» оновлено, канон у `openspec/` |
 
 Найсильніший загальний висновок: план **безпеково дуже зрілий** (7 проходів аудиту, більшість

@@ -11,8 +11,23 @@
 - **THEN** наступні send через бот отримують `-32005`/pause-стан; ретраїв «наосліп» немає
 
 ### Requirement: Idempotency send-шляху
-Сервер SHALL приймати idempotency-key і дедуплікувати ретраї в межах TTL;
-дубль SHALL NOT повторно декрементувати бюджет чи слати повторно.
+Сервер SHALL приймати idempotency-key (`messageId`) і дедуплікувати ретраї в межах TTL;
+дубль SHALL NOT повторно декрементувати бюджет чи слати повторно, а SHALL повертати
+оригінальний результат.
+
+#### Scenario: дубль-ретрай у межах TTL
+- **WHEN** клієнт повторює `sendTextMessage` із тим самим idempotency-key у межах TTL
+- **THEN** фактичний send і декремент бюджету відбуваються рівно раз; повтор отримує
+  збережений результат першого виклику
+
+### Requirement: Server-heartbeat (persistent-WS)
+Для persistent-WS сервер SHALL слати app-level heartbeat-нотифікацію з інтервалом <25с,
+щоб ефемерні клієнти (MV3 Service Worker) тримали з'єднання й відрізняли живий сокет
+від завислого (C5-серверна половина R3.3). За connect-on-demand MVP heartbeat не потрібен.
+
+#### Scenario: idle persistent-з'єднання
+- **WHEN** persistent-WS простоює без RPC-трафіку
+- **THEN** клієнт отримує heartbeat раніше ніж за 25с; відсутність кількох поспіль → реконект
 
 ### Requirement: Redact-дисципліна логів
 Структуровані логи SHALL проходити redact-allowlist; токен-несні params, заголовки auth,
