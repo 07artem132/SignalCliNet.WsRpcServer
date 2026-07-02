@@ -6,8 +6,8 @@
 - [ ] 1.3 `redeemInvite` = IdentityOnboarding-політика (без токена, rate-limited) + атомарний consume (W20-патерн)
 
 ## 2. Admin bootstrap + auth
-- [ ] 2.1 РІШЕННЯ S3: єдина історія admin-креденшела (mTLS-cert R3.8 vs one-time token G5/R3.7)
-- [ ] 2.2 Перший старт: admin-identity ідемпотентно; креденшел у `0600`-файл на томі, не stdout (G5)
+- [x] 2.1 S3 ЗАКРИТО: admin-креденшел = **mTLS client-cert bundle** (R3.8); token-шлях superseded, не робити
+- [ ] 2.2 Перший старт: admin-identity ідемпотентно; admin cert-bundle у `0600`-файл на томі, не stdout (G5)
 - [ ] 2.3 mTLS: cert від авто-ген CA → principal `role=admin`; lifecycle/revoke admin-cert (CRL або стор)
 - [ ] 2.4 G10: legacy Phase-1 акаунт → bind до admin-identity на першому старті
 
@@ -19,7 +19,7 @@
 
 ## 4. Тести (DoD)
 - [ ] 4.1 Per-code cap блокує підбір; паралельні guesses не обходять cap гонкою (G12)
-- [ ] 4.2 Admin one-time креденшел НЕ у `docker logs`/journald (G5)
+- [ ] 4.2 Admin cert-bundle (bootstrap) НЕ у `docker logs`/journald (G5)
 - [ ] 4.3 Не-admin cert/токен на admin-метод → `-32001`
 - [ ] 4.4 Upgraded інстанс: legacy account видно лише admin (G10)
 - [ ] 4.5 Audit-події лягають у лог (лінк бот-девайсу / інвайт / промоушн / revoke)
