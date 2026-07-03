@@ -13,7 +13,7 @@
 ## 3. Клієнтський контракт + сервер-половини
 - [ ] 3.1 Docs: connect-on-demand, burst-reuse (W14), jittered backoff + одиниці (G13), C6-нотатка
 - [ ] 3.2 Server-heartbeat (<25с, app-level notification) — implementation (C5-серверна, S8)
-- [ ] 3.3 Idempotency-key/`messageId` + dedup-стор із TTL; ретрай не декрементить бюджет двічі (C2-серверна, S8)
+- [ ] 3.3 Idempotency-key/`messageId` + **durable** dedup-стор із TTL у тій самій SQLite, ключ `(identityId, messageId)` (C2-серверна, S8, T6): `pending`+декремент бюджету однією транзакцією ДО send → `done` після; `pending` після рестарту → типізована «outcome unknown», БЕЗ авто-повтору (at-most-once, як W13); dedup-lookup ПЕРЕД admission-функцією
 
 ## 4. Perf/CI/docs
 - [ ] 4.1 Perf-gate: load-smoke; budget-persist writes/sec під навантаженням (N3/G11)
@@ -23,5 +23,6 @@
 ## 5. Тести (DoD)
 - [ ] 5.1 Вбити signal-cli посеред прогону → сервер відновлюється
 - [ ] 5.2 Proof-required/captcha → бот паузиться, без долбання
-- [ ] 5.3 Дубль-ретрай з тим самим idempotency-key → 1 send, 1 декремент бюджету
+- [ ] 5.3 Дубль-ретрай з тим самим idempotency-key → 1 send, 1 декремент бюджету (вкл. через рестарт: durable-стор)
 - [ ] 5.4 Persistent-WS без трафіку отримує heartbeat <25с; серія пропусків → реконект (C5)
+- [ ] 5.5 T6: краш між `pending` і send → після рестарту ретрай отримує «outcome unknown», send НЕ повторюється, бюджет НЕ декрементується вдруге; hit `done` → результат без admission

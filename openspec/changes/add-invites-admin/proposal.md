@@ -26,4 +26,7 @@ Sybil-гейт (хто взагалі юзає бота) — інвайти; п�
 
 ## Вплив
 - Specs: `admin-and-invites` (нова capability).
+- Залежності (T1): auto-gen CA (для admin client-cert) і encrypted-том із `0600`-файлами —
+  артефакти `add-secure-deploy-persistence` (tasks 2.1/2.2); identity-записи — його ж
+  durable-стор (task 3.1).
 - Прогалини: закриває **S3** (admin-креденшел = mTLS-cert, token-шлях superseded), S7-частину (W24).

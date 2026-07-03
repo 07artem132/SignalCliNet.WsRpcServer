@@ -18,11 +18,23 @@ Production-готовність: метрики, структуровані ло
   одиниці retry_after (G13); server-heartbeat <25с для persistent-WS (C5-серверна);
   idempotency-key/`messageId` (C2-серверна — ⚠ потребує implementation-task, GAPS S8);
   wake→connect латентність необмежена (C6).
+- **Idempotency — durability і місце в ланцюжку (T6, симетрія з W13):** dedup-стор **durable**
+  у тій самій SQLite, ключ `(identityId, messageId)` (без крос-тенантних колізій); запис
+  `pending` + декремент бюджету в одній транзакції ДО send, після send — `done` з результатом;
+  канон при краші = **at-most-once**: ретрай, що знаходить `pending` після рестарту, дістає
+  типізовану помилку «outcome unknown» і НЕ тригерить авто-повтор (over-send → бан —
+  безпекова властивість; недосил допустимий — та сама логіка, що форфейт W13; зафіксувати
+  в client-contract docs). Dedup-lookup стоїть ПЕРЕД admission-функцією (hit `done` →
+  збережений результат без admission/декременту; шов зафіксовано і в `admission-control` spec).
 - **Perf-gate** перед оптимізацією IPC: load-test; budget-persist 1 запис/K send (N3/G11).
 - **(Опційно) Receive/events RPC-surface** (`ISignalEventsRpc`, W5-асиметрія discovery);
-  receive-loop уже є з `add-group-claim-receive`.
+  receive-loop уже є з `add-group-claim-receive`; підписка — СТРОГО через per-account роутер
+  за його forward-правилом (T7: shared-bot події identity X — лише групи з активним binding X;
+  решта — admin-only/drop), інваріант роутера не ревізується.
 - **CI:** + docker publish.
 
 ## Вплив
 - Specs: `operations` (нова capability).
-- Прогалини: закриває S7-частини (V10/W10 DoD — N5), S8 (якщо додати idempotency-task).
+- Прогалини: закриває S7-частини (V10/W10 DoD — N5), S8 (idempotency/heartbeat — tasks 3.2/3.3),
+  **T6** (durable idempotency + at-most-once канон + dedup ПЕРЕД admission — task 3.3,
+  DoD 5.3/5.5).

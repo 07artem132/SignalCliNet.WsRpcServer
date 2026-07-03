@@ -13,12 +13,14 @@
 - [ ] 2.3 Origin-allowlist: конкретний `chrome-extension://<id>`; defense-in-depth, не authn (C3)
 - [ ] 2.4 Fallback first-message `authenticate` + auth-таймаут + cap неавтентиф. сокетів/IP
 - [ ] 2.5 Redact: токен/`authenticate`-params/device-link URI не в логах
+- [ ] 2.6 In-band auth-відмова (T4): валідний за формою, але невалідний токен → upgrade завершити й одразу закрити `4401` + reason (`expired`/`revoked`/`invalid`); голий 401 — лише без токена; 4401-сокети рахуються в per-IP unauth-cap
 
 ## 3. PoP + enrollment
 - [ ] 3.1 Challenge-response: nonce one-time, TTL, bound `nonce‖connId`, CSPRNG ≥128-bit (G8)
 - [ ] 3.2 Стан `PoP-pending`: RPC заборонені, auth-таймаут, рахувати в half-open cap (D8)
 - [ ] 3.3 `redeemInvite` реєструє device-pubkey (D1); key-rotation-on-loss = форс re-invite
 - [ ] 3.4 Secret-DTO: source-gen реєстрація + `[JsonIgnore]` + guard-тест resolve через Default (A1)
+- [ ] 3.5 Renewal через PoP (T5): expired (не revoked) токен + успішний PoP → новий токен у W21-транзакції ротації; revoked → відмова завжди; rate-limit renewal per identity
 
 ## 4. Тести (DoD)
 - [ ] 4.1 Прострочений токен → auth-помилка без бізнес-логіки
@@ -26,3 +28,5 @@
 - [ ] 4.3 PoP: replay вкраденим токеном без device-ключа → відмова; релей підпису на інший сокет → відмова (G8)
 - [ ] 4.4 Revoke-каскад: device-секрет мертвий після revoke identity
 - [ ] 4.5 Токен не в логах (перевірка лог-виходу)
+- [ ] 4.6 T4: браузерний WS із протухлим токеном бачить close `4401` + reason і відрізняє його від мережевого фейлу; запит без токена → HTTP 401 до апгрейду
+- [ ] 4.7 T5: expired+PoP → новий токен, старий revoked (zero-overlap); revoked+PoP → відмова
