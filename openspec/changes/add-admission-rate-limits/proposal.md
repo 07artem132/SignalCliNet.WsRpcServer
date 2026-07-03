@@ -24,6 +24,10 @@ auth/idle-timeout, бот-бюджет — net-new (звірка №5). Чоти
 ## Вплив
 - Код: `Security/AdmissionControl`, budget store (durable), декоратор над `ISignalCliClient` (G6).
 - Specs: `admission-control` (нова capability).
+- Залежності (T1): durable budget store — таблиця з `add-secure-deploy-persistence` (task 3.1).
+- Шов із `add-ops-observability` (T6): dedup-lookup idempotency-шару стоїть ПЕРЕД
+  admission-функцією — hit по завершеному ключу віддає збережений результат без admission
+  і без декременту бюджету (зафіксовано в обох specs).
 - Прогалини: закриває S7-частину (D15 монотонний годинник — task 2.3), S9 (in-band
   retry_after — task 4.1, DoD 5.6); фіксує S5 (frame-тріада винесена з app-задач —
   єдине канонічне формулювання, tasks 3.1/3.4).

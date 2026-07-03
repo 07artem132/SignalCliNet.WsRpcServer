@@ -6,6 +6,9 @@
 Кожен send SHALL проходити одну впорядковану admission-функцію
 (global_pause → per-user quota → new-recipient window → aggregate budget)
 із short-circuit на першому deny; лімітери НЕ приймають рішення незалежно.
+За наявності idempotency-шару (`add-ops-observability`, T6) dedup-перевірка SHALL
+передувати всьому ланцюжку: hit по завершеному idempotency-key повертає збережений
+результат без admission і без декременту бюджету.
 
 ### Requirement: Анти-бан бюджет без over-send
 Декремент агрегатного бюджету SHALL бути атомарним (RMW під lock або умовний UPDATE);

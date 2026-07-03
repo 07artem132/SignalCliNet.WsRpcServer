@@ -32,7 +32,9 @@ dotnet run --project src/SignalCliNet.WsRpcServer    # serves WS JSON-RPC on Ser
 ```
 
 Configuration is `appsettings.json` (sections `Server`, `SignalCli`, `Logging`), overridable via
-environment/`Host.CreateDefaultBuilder`. Default listen address is `0.0.0.0:9000`.
+environment/`Host.CreateDefaultBuilder`. Default listen address is `127.0.0.1:9000`
+(Phase-1 loopback hardening — see `openspec/specs/ws-jsonrpc-gateway/spec.md`; non-loopback
+bind is forbidden until auth lands).
 
 ### Restoring packages in a sandboxed env (Claude Code on the web)
 
@@ -77,9 +79,7 @@ The `dotnet` SDK itself is `apt`-installable from `packages.microsoft.com`.
 2. **Upstream versions move together.** When bumping `SignalCli.NET`, `JSON-RPC.NET`, `SignalCli.Runtime`
    or the JDK, update the csproj, `NuGet.Config` (if a feed/package id changes), `deploy/Dockerfile*`,
    and `deploy/DEPLOYMENT.md` in the **same commit** — they drift easily. (The README's `.NET` /
-   `07artem132` references are now aligned with the code; the one remaining stale claim is **JDK 21+** —
-   signal-cli 0.14.3 actually needs **JDK 25**, per `deploy/DEPLOYMENT.md`. Fix it when you next touch the
-   README.)
+   `07artem132` / JDK references are now aligned with the code — README already says **JDK 25**.)
 3. **No secrets in the repo.** Signal account data lives under `SignalCliStorageData/` (git-ignored);
    never commit account keys, phone numbers, tokens, or `appsettings` overrides with real values.
 4. **Privacy in logs.** Don't log message bodies, phone numbers, or attachment payloads — mirror the

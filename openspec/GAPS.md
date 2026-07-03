@@ -147,3 +147,111 @@ Append-only формат звірок вичерпав себе: 7 ітерац�
 у кінець, а базові розділи не правились. Декомпозиція на specs/changes прибирає цей клас.
 
 **Стан S-серії: усі S1–S12 закриті** (рішення/task/DoD у відповідних changes; трасування звірено).
+
+---
+
+# Прогалини OpenSpec-структури — T-серія (незалежне рев'ю, 2026-07-03)
+
+Знайдено при незалежній перевірці вже готової OpenSpec-декомпозиції (**понад** S-серію):
+переважно логічні діри **на швах між change-ами** — клас, який неможливо побачити, читаючи
+кожен change окремо. Формат той самий: severity 🔴/🟠/🟡; рішення інлайнені канонічно.
+
+**🔴 T1. Граф залежностей суперечить змісту change-ів. ✅ ЗАКРИТО.**
+`project.md` оголошував `add-secure-deploy-persistence` «паралельним 1-6», але саме він створює
+фундамент, який споживають інші: durable SQLite-стор (authn — токени/device-секрети; admission —
+budget store; group-claim — `account → owning-identity` + bindings; task 1.4 group-claim *прямо*
+посилався на «стор із add-secure-deploy-persistence»), auto-gen CA (invites-admin — mTLS admin-cert)
+і encrypted-том (`0600`-файли). Імплементер, що йде за таблицею, впирається у відсутній фундамент.
+→ **РІШЕННЯ:** `add-secure-deploy-persistence` переміщено на позицію 2 порядку (залежностей
+не має); `add-authn-token-pop`, `add-admission-rate-limits`, `add-invites-admin`,
+`add-group-claim-receive` явно залежать від нього; кожен proposal-споживач називає конкретний
+артефакт, який бере з фундаменту. Дробити change не стали — його внутрішні задачі 2.x/3.x
+виконуються першими.
+
+**🔴 T2. Membership-check S10.2 суперечив delegation-by-proxy S10.3 — механізму «U ∈ G» не існувало. ✅ ЗАКРИТО.**
+Spec вимагав «перевірку членства (U ∈ G) при КОЖНОМУ send», але identity U — користувач
+розширення з токеном, а членство — Signal-ідентифікатор у member-list групи; **звідки сервер
+знає Signal-ідентифікатор U — не було сказано ніде**. Єдине природне джерело (відправник, що
+вставив код у чат) ламається рівно в accepted-risk сценарії S10.3 (код може вставити не U).
+→ **РІШЕННЯ (anchor-модель):** при confirm сканер фіксує в binding'у **ACI вставника коду**
+(«anchor»; ACI, не E.164 — менше PII). Binding = `(identity U, group G, anchorAci)`; перевірка
+членства при кожному send = чітко визначене `anchorAci ∈ members(G)`. У нормальному випадку
+anchor = сам U (семантика «U вийшов → відмова» як задумано); у proxy-випадку право U живе,
+поки вставник-поручитель лишається членом G — accepted-risk дістає чесну семантику. Перф:
+кеш member-list з коротким TTL (~60с) + інвалідизація по group-update подіях авто-receive.
+→ `add-group-claim-receive` (spec «Валідність binding», tasks 0.2/2.2/2.5, DoD 4.6/4.8).
+
+**🟠 T3. Bootstrap-діра: щоб claim'нути G, треба знати group-ID, який нізвідки взяти. ✅ ЗАКРИТО.**
+`requestGroupClaim(G)` вимагав ідентифікатор групи, але `listGroups` (R3.2) до claim'у її не
+показує, а внутрішній group-ID Signal із клієнтського застосунку не видно — курка-і-яйце.
+→ **РІШЕННЯ (group-agnostic код):** `requestGroupClaim()` видає код, прив'язаний лише до
+(U, TTL, one-time); **група фіксується сканером** — binding створюється до тієї G, де код
+фактично з'явився (+ anchor із T2). Discovery-поверхні не треба → R3.2/G9 не послаблюються.
+Residual «чужий код вставили в іншу групу» дешевий: binding дає права лише самому U;
+U бачить свої bindings (`listMyBindings`) і може revoke-нути зайвий; quota на активні
+bindings уже була. → `add-group-claim-receive` (spec «One-time claim-код» + новий Requirement
+самокерування bindings, tasks 2.1/2.2/2.6, DoD 4.9).
+
+**🟠 T4. Auth-відмови невидимі браузерному клієнту — логіка S9 не була застосована до 401. ✅ ЗАКРИТО.**
+«401 ДО апгрейду» на невалідний токен → браузерний WS бачить лише generic close 1006 і не
+відрізняє «токен протух → re-auth» від «сервер лежить → ретрай» (та сама діра, що S9 для 429).
+→ **РІШЕННЯ (дзеркало S9):** close-code **`4401`** з машиночитним reason (`expired`/`revoked`/
+`invalid`): якщо в upgrade є синтаксично валідний токен-субпротокол, але токен невалідний —
+сервер завершує upgrade і одразу закриває `4401`, нічого не виконуючи. Голий 401-до-апгрейду —
+лише для запитів без токена. 4401-сокети рахуються в per-IP cap неавтентифікованих
+(admission 3.2) — вартість зайвого upgrade обмежена. → `add-authn-token-pop`
+(spec «Bearer через субпротокол», task 2.6, DoD 4.6).
+
+**🟠 T5. Відновлення після протухання токена не специфіковане (TTL 12h блокував identity назавжди). ✅ ЗАКРИТО.**
+Ротація вимагає валідного токена; клієнт, відсутній довше за TTL, лишався замкненим назовні,
+а поведінка повторного інвайту (нова identity vs re-bind) не була визначена ніде.
+→ **РІШЕННЯ (renewal через PoP):** device-ключ = довготривалий корінь (enrollment-rooted TOFU,
+D1), токен = короткоживуча сесія. Через існуючий fallback `authenticate`: **прострочений
+(НЕ revoked) токен + успішний PoP device-ключем → новий токен** тією самою W21-транзакцією
+ротації; `IsRevoked` завжди виграє (revoked + валідний PoP → відмова — revocation лишається
+головною гарантією D7); renewal під rate-limit per identity. Інвайти лишаються строго one-time.
+→ `add-authn-token-pop` (новий Requirement, task 3.5, DoD 4.7).
+
+**🟠 T6. Idempotency: durability стору й місце dedup у admission-ланцюжку не задані. ✅ ЗАКРИТО.**
+In-memory dedup ламає «рівно один send» через рестарт (краш після send до відповіді → ретрай →
+другий реальний send = over-send, який W13 так ретельно виключив для бюджету); місце dedup
+відносно admission/бюджету не було специфіковане.
+→ **РІШЕННЯ (симетрія з W13):** (1) стор **durable** у тій самій SQLite, ключ
+`(identityId, messageId)` — без крос-тенантних колізій; (2) запис `pending` + декремент бюджету
+в **одній транзакції ДО send**, після send — апдейт у `done` з результатом; (3) канон при
+краші = **at-most-once**: ретрай, що знаходить `pending` після рестарту, дістає типізовану
+помилку «outcome unknown» і НЕ тригерить авто-повтор (over-send → бан — безпекова властивість,
+недосил допустимий — та сама логіка, якою W13 обрав форфейт); (4) dedup-lookup стоїть **ПЕРЕД**
+admission-функцією (hit `done` → збережений результат без admission і декременту).
+→ `add-ops-observability` (spec «Idempotency», task 3.3, DoD 5.3/5.5) + одне речення
+в `admission-control` spec (Requirement «Єдине admission-правило»).
+
+**🟡 T7. Роутер «shared-bot → ЛИШЕ сканеру» суперечив опційній Phase-3 events-поверхні. ✅ ЗАКРИТО.**
+Будь-який майбутній events-підписник shared-bot потоку порушив би щойно прийнятий інваріант
+буквально — Phase-3 почалась би з ревізії правила.
+→ **РІШЕННЯ (forward-правило зараз, імплементація потім):** shared-bot-потік фанаутиться
+(а) сканеру завжди; (б) events-consumer'у identity X — **лише** envelope'и груп, на які X має
+активний binding (group-scoped фільтр по bindings із T2/T3); (в) решта shared-bot трафіку
+(DM боту тощо) — admin-only або drop. → `add-group-claim-receive` (spec «Per-account
+receive-роутер»), посилання з ops-proposal (events-surface).
+
+**🟡 T8. Доc-дрейф CLAUDE.md. ✅ ЗАКРИТО.**
+`CLAUDE.md` стверджував «Default listen address is `0.0.0.0:9000`» — код (`appsettings.json`)
+і as-built spec кажуть `127.0.0.1:9000` (loopback-hardening Фази 1). Заодно виявилось, що
+примітка CLAUDE.md про «stale JDK 21+ у README» сама застаріла — README уже каже JDK 25.
+→ Виправлено обидва місця в `CLAUDE.md`.
+
+## Трасування T-серії
+
+| Gap | Severity | Рішення (канон) | Task | DoD |
+|---|---|---|---|---|
+| T1 | 🔴 | change 7 = фундамент, позиція 2; залежності 2/3/5/6 ← 7 | `project.md` табл. + proposals | — (структурне) |
+| T2 | 🔴 | anchor-модель: binding несе ACI вставника; check = anchor ∈ G | group-claim 0.2/2.2/2.5 | 4.6, 4.8 |
+| T3 | 🟠 | group-agnostic claim-код; G фіксує сканер; listMyBindings/revoke | group-claim 2.1/2.2/2.6 | 4.9 |
+| T4 | 🟠 | in-band `4401` + reason; 401 лише для no-token | authn 2.6 | 4.6 |
+| T5 | 🟠 | renewal: expired (не revoked) + PoP → новий токен (W21-транзакція) | authn 3.5 | 4.7 |
+| T6 | 🟠 | durable dedup `(identity, messageId)`; pending-до-send; at-most-once; dedup ПЕРЕД admission | ops 3.3; admission spec | ops 5.3, 5.5 |
+| T7 | 🟡 | forward-правило роутера: events лише по claim'нутих групах | group-claim spec (роутер) | — (правило) |
+| T8 | 🟡 | CLAUDE.md: `127.0.0.1:9000`; прибрано stale-примітку про README | — | — (docs) |
+
+**Стан T-серії: усі T1–T8 закриті** (2026-07-03; правки внесені у відповідні proposals/tasks/specs).
