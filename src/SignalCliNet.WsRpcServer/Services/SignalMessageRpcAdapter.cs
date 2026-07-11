@@ -18,8 +18,8 @@ public class SignalMessageRpcAdapter(ISignalMessage signalMessage, ILogger<Signa
 
     public async Task<SendMessageResponse> SendTextMessage(
         string account,
-        IEnumerable<string>? recipients,
         string message,
+        IEnumerable<string>? recipients = null,
         IEnumerable<string>? groups = null,
         CancellationToken cancellationToken = default)
     {

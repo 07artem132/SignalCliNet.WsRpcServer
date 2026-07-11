@@ -360,7 +360,7 @@ asyncio.run(main())
 
 #### 💬 4. Надсилання повідомлень
 
-- **sendTextMessage** `{ account: string, recipients?: string[], message: string, groups?: string[] }`
+- **sendTextMessage** `{ account: string, message: string, recipients?: string[], groups?: string[] }`
 
   Надсилання текстового повідомлення користувачам (`recipients`, E.164 або UUID) або в групу
   (`groups`, base64 `id` з `listGroups`).

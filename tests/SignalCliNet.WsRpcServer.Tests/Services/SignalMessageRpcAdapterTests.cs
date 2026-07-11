@@ -24,7 +24,7 @@ public class SignalMessageRpcAdapterTests
 
         var adapter = CreateAdapter(facade);
 
-        var result = await adapter.SendTextMessage("+10000000001", ["+10000000002"], "hi");
+        var result = await adapter.SendTextMessage("+10000000001", "hi", ["+10000000002"]);
 
         Assert.Same(expected, result);
         facade.Verify(m => m.SendTextMessageAsync(It.IsAny<TextMessageOptions>(), It.IsAny<CancellationToken>()),
@@ -41,7 +41,7 @@ public class SignalMessageRpcAdapterTests
         var adapter = CreateAdapter(facade);
 
         var ex = await Assert.ThrowsAsync<RpcErrorException>(
-            () => adapter.SendTextMessage(account!, ["+10000000002"], "hi"));
+            () => adapter.SendTextMessage(account!, "hi", ["+10000000002"]));
 
         Assert.Equal(JsonRpcErrorCode.InvalidParams, ex.ErrorCode);
         facade.Verify(m => m.SendTextMessageAsync(It.IsAny<TextMessageOptions>(), It.IsAny<CancellationToken>()),
@@ -55,7 +55,7 @@ public class SignalMessageRpcAdapterTests
         var adapter = CreateAdapter(facade);
 
         var ex = await Assert.ThrowsAsync<RpcErrorException>(
-            () => adapter.SendTextMessage("+10000000001", [" ", ""], "hi"));
+            () => adapter.SendTextMessage("+10000000001", "hi", [" ", ""]));
 
         Assert.Equal(JsonRpcErrorCode.InvalidParams, ex.ErrorCode);
         facade.Verify(m => m.SendTextMessageAsync(It.IsAny<TextMessageOptions>(), It.IsAny<CancellationToken>()),
@@ -72,7 +72,7 @@ public class SignalMessageRpcAdapterTests
         var adapter = CreateAdapter(facade);
 
         var ex = await Assert.ThrowsAsync<RpcErrorException>(
-            () => adapter.SendTextMessage("+10000000001", ["+10000000002"], "hi"));
+            () => adapter.SendTextMessage("+10000000001", "hi", ["+10000000002"]));
 
         Assert.Equal(JsonRpcErrorCode.InvocationError, ex.ErrorCode);
     }
@@ -90,7 +90,7 @@ public class SignalMessageRpcAdapterTests
         var adapter = CreateAdapter(facade);
 
         var result = await adapter.SendTextMessage(
-            "+10000000001", recipients: null, "hi", groups: ["GROUP-ID-BASE64=="]);
+            "+10000000001", "hi", groups: ["GROUP-ID-BASE64=="]);
 
         Assert.Same(expected, result);
         var recipient = Assert.Single(captured!.Recipients);
@@ -113,7 +113,7 @@ public class SignalMessageRpcAdapterTests
 
         var ex = await Assert.ThrowsAsync<RpcErrorException>(
             () => adapter.SendTextMessage(
-                "+10000000001", ["+10000000002"], "hi", groups: ["GROUP-ID-BASE64=="]));
+                "+10000000001", "hi", ["+10000000002"], groups: ["GROUP-ID-BASE64=="]));
 
         Assert.Equal(JsonRpcErrorCode.InvalidParams, ex.ErrorCode);
     }
