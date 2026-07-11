@@ -18,8 +18,9 @@ public class SignalMessageRpcAdapter(ISignalMessage signalMessage, ILogger<Signa
 
     public async Task<SendMessageResponse> SendTextMessage(
         string account,
-        IEnumerable<string> recipients,
+        IEnumerable<string>? recipients,
         string message,
+        IEnumerable<string>? groups = null,
         CancellationToken cancellationToken = default)
     {
         // privacy (CLAUDE rule #4): не логувати account(=E.164) — лише факт виклику
@@ -28,10 +29,13 @@ public class SignalMessageRpcAdapter(ISignalMessage signalMessage, ILogger<Signa
         if (string.IsNullOrWhiteSpace(account))
             throw new RpcErrorException(JsonRpcErrorCode.InvalidParams, "Account cannot be empty");
 
-        var recipientList = recipients?
+        var recipientList = new List<IRecipient>();
+        recipientList.AddRange((recipients ?? [])
             .Where(static r => !string.IsNullOrWhiteSpace(r))
-            .Select(static r => (IRecipient)new UserRecipient(r))
-            .ToList() ?? [];
+            .Select(static r => (IRecipient)new UserRecipient(r)));
+        recipientList.AddRange((groups ?? [])
+            .Where(static g => !string.IsNullOrWhiteSpace(g))
+            .Select(static g => (IRecipient)new GroupRecipient(g)));
 
         if (recipientList.Count == 0)
             throw new RpcErrorException(JsonRpcErrorCode.InvalidParams, "At least one recipient is required");
@@ -49,6 +53,12 @@ public class SignalMessageRpcAdapter(ISignalMessage signalMessage, ILogger<Signa
         catch (RpcErrorException)
         {
             throw;
+        }
+        catch (ArgumentException ex)
+        {
+            // Порушення правил комбінування отримувачів (SignalCli.NET: максимум одна група,
+            // без змішування user+group) — це помилка параметрів клієнта, не invocation-збій.
+            throw new RpcErrorException(JsonRpcErrorCode.InvalidParams, ex.Message, ex);
         }
         catch (Exception ex)
         {
