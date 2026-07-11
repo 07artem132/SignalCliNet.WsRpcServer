@@ -153,7 +153,7 @@ ws.on('open', () => {
   const request = {
     jsonrpc: '2.0',
     id: 1,
-    method: 'ListAccountsAsync',
+    method: 'listAccounts',
     params: {}
   };
   
@@ -177,7 +177,7 @@ async def main():
         request = {
             "jsonrpc": "2.0",
             "id": 1,
-            "method": "ListAccountsAsync",
+            "method": "listAccounts",
             "params": {}
         }
         await ws.send(json.dumps(request))
@@ -193,9 +193,14 @@ asyncio.run(main())
 
 Нижче наведено повний список (з прикладами). Усі методи викликаються через JSON-RPC.
 
+> ⚠️ **Іменування:** на дроті методи реєструються в **camelCase і без суфікса `Async`**
+> (`AbstractRpcServiceRegistry` вмикає `CommonMethodNameTransforms.CamelCase` зі StreamJsonRpc):
+> C#-метод `SendTextMessage` викликається як `sendTextMessage`. Виклик з неправильним ім'ям
+> повертає помилку `-32601 Method not found`.
+
 #### 👤 1. Керування акаунтами
 
-- **ListAccountsAsync** `{}`
+- **listAccounts** `{}`
 
   Отримання списку зареєстрованих акаунтів Signal.
 
@@ -204,7 +209,7 @@ asyncio.run(main())
   {
     "jsonrpc": "2.0",
     "id": 1,
-    "method": "ListAccountsAsync",
+    "method": "listAccounts",
     "params": {}
   }
   ```
@@ -214,13 +219,13 @@ asyncio.run(main())
     "jsonrpc": "2.0",
     "id": 1,
     "result": [
-      { "Number": "+380501234567" },
-      { "Number": "+380501234568" }
+      { "number": "+380501234567" },
+      { "number": "+380501234568" }
     ]
   }
   ```
 
-- **SendSyncRequestAsync** `{}`
+- **syncAccount** `{}`
 
   Надсилає запит на синхронізацію акаунта (груп, контактів тощо).
 
@@ -229,7 +234,7 @@ asyncio.run(main())
   {
     "jsonrpc": "2.0",
     "id": 2,
-    "method": "SendSyncRequestAsync",
+    "method": "syncAccount",
     "params": {}
   }
   ```
@@ -244,7 +249,7 @@ asyncio.run(main())
 
 #### 👥 2. Керування групами
 
-- **ListGroupsAsync** `{ account: string }`
+- **listGroups** `{ account: string }`
 
   Отримання списку груп для вказаного акаунта.
 
@@ -253,7 +258,7 @@ asyncio.run(main())
   {
     "jsonrpc": "2.0",
     "id": 3,
-    "method": "ListGroupsAsync",
+    "method": "listGroups",
     "params": {
       "account": "+380501234567"
     }
@@ -302,7 +307,7 @@ asyncio.run(main())
 
 #### 📱 3. Керування пристроями
 
-- **StartLinkAsync** `{}`
+- **startLink** `{}`
 
   Початок процесу прив'язування нового пристрою (дає URI для QR-коду).
 
@@ -311,7 +316,7 @@ asyncio.run(main())
   {
     "jsonrpc": "2.0",
     "id": 4,
-    "method": "StartLinkAsync",
+    "method": "startLink",
     "params": {}
   }
   ```
@@ -321,12 +326,12 @@ asyncio.run(main())
     "jsonrpc": "2.0",
     "id": 4,
     "result": {
-      "DeviceLinkUri": "sgnl://linkdevice?uuid=abcdef&pub_key=BASE64KEY"
+      "deviceLinkUri": "sgnl://linkdevice?uuid=abcdef&pub_key=BASE64KEY"
     }
   }
   ```
 
-- **FinishLinkAsync** `{ deviceLinkUri: string, deviceName: string }`
+- **finishLink** `{ deviceLinkUri: string, deviceName: string }`
 
   Завершення прив'язки пристрою, використовуючи URI та назву.
 
@@ -335,7 +340,7 @@ asyncio.run(main())
   {
     "jsonrpc": "2.0",
     "id": 5,
-    "method": "FinishLinkAsync",
+    "method": "finishLink",
     "params": {
       "deviceLinkUri": "sgnl://linkdevice?uuid=abcdef&pub_key=BASE64KEY",
       "deviceName": "Мій комп'ютер"
@@ -355,32 +360,36 @@ asyncio.run(main())
 
 #### 💬 4. Надсилання повідомлень
 
-- **SendTextMessageAsync**
+- **sendTextMessage** `{ account: string, recipients?: string[], message: string, groups?: string[] }`
 
-  Надсилання текстового повідомлення одному чи кільком отримувачам.
+  Надсилання текстового повідомлення користувачам (`recipients`, E.164 або UUID) або в групу
+  (`groups`, base64 `id` з `listGroups`).
+> ℹ️ **Обмеження signal-cli:** максимум одна група за виклик і без змішування
+> користувачів та груп в одному повідомленні (інакше `-32602 Invalid params`).
 
-  **Запит**:
+  **Запит (користувачам)**:
   ```json
   {
     "jsonrpc": "2.0",
     "id": 6,
-    "method": "SendTextMessageAsync",
+    "method": "sendTextMessage",
     "params": {
       "account": "+380501234567",
       "recipients": ["+380501234568", "+380501234569"],
-      "message": "Привіт! Як справи?",
-      "externalTextStyles": null,
-      "mentions": null,
-      "quoteTimestamp": null,
-      "quoteAuthor": null,
-      "quoteMessage": null,
-      "quoteMentions": null,
-      "quoteTextStyles": null,
-      "quoteAttachments": null,
-      "previewUrl": null,
-      "previewTitle": null,
-      "previewDescription": null,
-      "previewImage": null
+      "message": "Привіт! Як справи?"
+    }
+  }
+  ```
+  **Запит (у групу)**:
+  ```json
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "method": "sendTextMessage",
+    "params": {
+      "account": "+380501234567",
+      "groups": ["group-id-base64"],
+      "message": "Привіт, групо!"
     }
   }
   ```
@@ -413,100 +422,17 @@ asyncio.run(main())
   }
   ```
 
-- **SendAttachmentMessageAsync**
+> 🗺️ Надсилання вкладень і стікерів через RPC ще **не реалізоване** (див. дорожню карту) —
+> SignalCli.NET це вміє, бракує лише адаптерів у сервері.
 
-  Надсилання повідомлення з вкладеннями одному чи кільком отримувачам.
-> ℹ️ **Існують такі обмеження:** За один раз надіслати прикріплення максимум можливо лише в 1 группу або 10 контактам.
+#### 🛎️ 5. Події та службові методи
 
-  **Запит**:
-  ```json
-  {
-    "jsonrpc": "2.0",
-    "id": 7,
-    "method": "SendAttachmentMessageAsync",
-    "params": {
-      "account": "+380501234567",
-      "recipients": ["+380501234568"],
-      "message": "Фото з останньої зустрічі:",
-      "base64Attachments": {
-        "image.jpg": "BASE64_ENCODED_CONTENT",
-        "document.pdf": "BASE64_ENCODED_CONTENT"
-      },
-      "externalTextStyles": null,
-      "mentions": null,
-      "quoteTimestamp": 1647245682000,
-      "quoteAuthor": "+380501234569",
-      "quoteMessage": "Коли будуть фотографії?",
-      "quoteMentions": null,
-      "quoteTextStyles": null,
-      "quoteAttachments": null
-    }
-  }
-  ```
-  **Відповідь**:
-  ```json
-  {
-    "jsonrpc": "2.0",
-    "id": 7,
-    "result": [
-      {
-        "results": [
-          {
-            "recipientAddress": {
-              "uuid": "group-uuid-1",
-              "number": null
-            },
-            "type": "SUCCESS"
-          }
-        ],
-        "timestamp": 1647245683000
-      }
-    ]
-  }
-  ```
+- **subscribe** `{ account: string, eventTypes: SignalEventTypes }` → `subscriptionId: int`
+- **updateSubscription** `{ subscriptionId: int, eventTypes: SignalEventTypes }` → `bool`
+- **unsubscribe** `{ subscriptionId: int }` → `bool`
+- **ping** `{}` → `"pong"`
 
-- **SendStickerMessageAsync**
-
-  Надсилання стікера одному чи кільком отримувачам.
-> **ℹ️ Формат ідентифікатора стикера** має вигляд `pack_id:sticker_id`, де `pack_id` — це ідентифікатор набору стікерів, а `sticker_id` — номер стікера.
-
-  **Запит**:
-  ```json
-  {
-    "jsonrpc": "2.0",
-    "id": 8,
-    "method": "SendStickerMessageAsync",
-    "params": {
-      "account": "+380501234567",
-      "recipients": ["+380501234568"],
-      "sticker": "b2e11667c59bce03b6bd13de0377a0b5:32"
-    }
-  }
-  ```
-  **Відповідь**:
-  ```json
-  {
-    "jsonrpc": "2.0",
-    "id": 8,
-    "result": [
-      {
-        "results": [
-          {
-            "recipientAddress": {
-              "uuid": "user-uuid-1",
-              "number": "+380501234568"
-            },
-            "type": "SUCCESS"
-          }
-        ],
-        "timestamp": 1647245684000
-      }
-    ]
-  }
-  ```
-
-
-#### ⚠️ 5. Обробка помилок
+#### ⚠️ 6. Обробка помилок
 
 Усі методи JSON-RPC можуть повертати помилки, дотримуючись формату JSON-RPC 2.0:
 
@@ -549,6 +475,9 @@ asyncio.run(main())
 2. **🧪 Юніт-тести**
     - Перевірка JSON-RPC-інтерфейсу.
     - Мок-тестування взаємодії з SignalCli.NET.
+
+3. **📎 RPC-адаптери для вкладень і стікерів**
+    - `sendAttachmentMessage`, `sendStickerMessage` поверх наявних можливостей SignalCli.NET.
 
 ---
 
