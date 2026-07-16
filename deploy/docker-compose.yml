@@ -11,7 +11,9 @@ services:
       dockerfile: deploy/Dockerfile
       args:
         GITHUB_USERNAME: "${GITHUB_USERNAME}"
-        GITHUB_TOKEN: "${GITHUB_TOKEN}"
+      # Feed-токен — BuildKit secret (task 2.4), НЕ build-arg: не потрапляє у шари/історію образу.
+      secrets:
+        - github_token
     image: wsrpcserver:latest
     container_name: wsrpcserver
     restart: unless-stopped
@@ -49,3 +51,9 @@ services:
 
 volumes:
   signalcli-data:
+
+secrets:
+  # Токен читається з env GITHUB_TOKEN лише під час build і монтується як BuildKit-secret
+  # (не осідає у шарах образу). Потрібен лише для package-based Dockerfile (feed-автентифікація).
+  github_token:
+    environment: GITHUB_TOKEN

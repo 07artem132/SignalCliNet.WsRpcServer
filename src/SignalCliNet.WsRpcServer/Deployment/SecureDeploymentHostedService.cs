@@ -18,6 +18,7 @@ namespace SignalCliNet.WsRpcServer.Deployment;
 public sealed class SecureDeploymentHostedService(
     IOptions<PersistenceOptions> persistenceOptions,
     IOptions<TransportSecurityOptions> transportOptions,
+    SecretMaterialProvisioner secretProvisioner,
     ILogger<SecureDeploymentHostedService> logger)
     : IHostedService, IDisposable
 {
@@ -26,6 +27,9 @@ public sealed class SecureDeploymentHostedService(
 
     private readonly TransportSecurityOptions _transport =
         transportOptions?.Value ?? throw new ArgumentNullException(nameof(transportOptions));
+
+    private readonly SecretMaterialProvisioner _secretProvisioner =
+        secretProvisioner ?? throw new ArgumentNullException(nameof(secretProvisioner));
 
     private readonly ILogger<SecureDeploymentHostedService> _logger =
         logger ?? throw new ArgumentNullException(nameof(logger));
@@ -50,6 +54,12 @@ public sealed class SecureDeploymentHostedService(
         _lock = DataDirectoryLock.Acquire(dataDirectory);
         _logger.LogInformation(
             "Захоплено single-instance lock на каталозі даних (G1); замок: {LockFile}", _lock.LockFilePath);
+
+        // Auto-gen секретів (persist-once, 0600): CA + server/admin cert + пеппери на томі (R3.4/R3.7).
+        var secrets = _secretProvisioner.Provision(dataDirectory, _transport.Tls.Hostname);
+        _logger.LogInformation(
+            "Секрети готові на томі (CA/server/admin cert + пеппери); каталог: {SecretsDir}",
+            Path.GetDirectoryName(secrets.CaCertificatePath));
 
         return Task.CompletedTask;
     }

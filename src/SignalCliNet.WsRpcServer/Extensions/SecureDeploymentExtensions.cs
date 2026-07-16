@@ -41,7 +41,10 @@ public static class SecureDeploymentExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<TransportSecurityOptions>, TransportSecurityOptionsValidator>());
 
-        // Стартовий сервіс: D4-assertion + G1-lock (реєструється ДО RPC-hosted-service, тож стартує першим).
+        // Auto-gen секретів (CA/cert/пеппери) — singleton, викликається зі стартового сервісу.
+        services.TryAddSingleton<SecretMaterialProvisioner>();
+
+        // Стартовий сервіс: D4-assertion + G1-lock + провіжн секретів (реєструється ДО RPC-hosted-service).
         services.AddHostedService<SecureDeploymentHostedService>();
 
         return services;

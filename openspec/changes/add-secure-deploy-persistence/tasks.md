@@ -7,10 +7,10 @@
 - [x] 1.4 D17: `LimitCORE=0`; секрети не потрапляють у dump-шляхи
 
 ## 2. Auto-gen секретів (R3.4/R3.7)
-- [ ] 2.1 First-boot: CA + server-cert + пеппери → encrypted-том, `0600`, persist-once
-- [ ] 2.2 Рестарт переюзає той самий CA (тест: client-trust не ламається)
-- [ ] 2.3 Renewal прострочених cert на старті; CA — довший термін
-- [ ] 2.4 BuildKit `--secret` для feed-токена (не в шарах образу)
+- [x] 2.1 First-boot: CA + server-cert + пеппери → encrypted-том, `0600`, persist-once
+- [x] 2.2 Рестарт переюзає той самий CA (тест: client-trust не ламається)
+- [x] 2.3 Renewal прострочених cert на старті; CA — довший термін
+- [x] 2.4 BuildKit `--secret` для feed-токена (не в шарах образу)
 
 ## 3. Durable стор
 - [ ] 3.1 Embedded DB (WAL, retry `SQLITE_BUSY`) на томі: identity/token/прив'язки/device-секрети/бюджет

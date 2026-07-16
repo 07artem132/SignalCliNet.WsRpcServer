@@ -35,6 +35,11 @@
       </None>
     </ItemGroup>
 
+    <ItemGroup>
+      <!-- Тести звертаються до internal-хелперів Deployment/ (CertificateFactory для renewal-тесту). -->
+      <InternalsVisibleTo Include="SignalCliNet.WsRpcServer.Tests" />
+    </ItemGroup>
+
     <!-- SignalCli.Runtime.targets копіює signal-cli лише у build-output ($(TargetDir)),
          тому dotnet publish його не переносить. Доносимо payload у publish-папку власноруч. -->
     <Target Name="CopySignalCliToPublish" AfterTargets="Publish">

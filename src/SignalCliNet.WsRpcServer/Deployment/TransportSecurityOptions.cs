@@ -41,4 +41,11 @@ public sealed class TlsOptions
 {
     /// <summary>Whether TLS is configured in front of the server (reverse-proxy termination).</summary>
     public bool Enabled { get; set; }
+
+    /// <summary>
+    /// Optional internal hostname to add to the auto-generated server certificate's SAN, so clients
+    /// connecting to an internal-CA deployment by that name validate cleanly. <c>null</c> ⇒ the cert
+    /// covers only <c>localhost</c> and the loopback addresses (R3.4/D3 — internal-CA path).
+    /// </summary>
+    public string? Hostname { get; set; }
 }
