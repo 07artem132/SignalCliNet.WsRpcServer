@@ -87,6 +87,9 @@ ENV PATH=/opt/jdk25/bin:$PATH
 ENV SignalCli__JavaExecutable=/opt/jdk25/bin/java
 # Persist linked-account keys/state here (mount a volume).
 ENV SignalCli__StoragePathCli=/data/SignalCliStorageData
+# Durable store + auto-generated secrets + single-instance lockfile live here too
+# (same volume — MUST be a platform-encrypted volume; R3.7/S2).
+ENV Persistence__DataDirectory=/data
 
 WORKDIR /app
 COPY --from=build /app ./

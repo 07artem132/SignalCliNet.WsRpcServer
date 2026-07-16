@@ -15,18 +15,36 @@ services:
     image: wsrpcserver:latest
     container_name: wsrpcserver
     restart: unless-stopped
+    # G1 (single-instance інваріант): рівно ОДНА репліка на data-dir. Другий екземпляр на тому ж
+    # томі відмовиться стартувати (exclusive lockfile). НЕ масштабуйте (--scale/replicas>1) — деплой
+    # = свідоме downtime-вікно (W15): зупиніть старий контейнер, потім підніміть новий.
+    deploy:
+      mode: replicated
+      replicas: 1
+    # D17: вимикаємо core-dump'и для сервіс-процеса — дамп міг би винести ключі/пеппери на
+    # (можливо незашифрований) шлях. Еквівалент `ulimit -c 0` / systemd `LimitCORE=0`.
+    ulimits:
+      core: 0
     ports:
-      # Host:Container. Bind to 127.0.0.1 and terminate TLS in a reverse proxy
-      # (see nginx-wss.conf.example) rather than exposing 9000 to the internet raw.
+      # Host:Container. Прив'язка до 127.0.0.1 на хості + термінація TLS у reverse-proxy
+      # (див. nginx-wss.conf.example / DEPLOYMENT.md §4), а не голий 9000 в інтернет.
       - "127.0.0.1:9000:9000"
     environment:
+      # Docker пробрасывает трафік на 0.0.0.0 контейнера, тож app МУСИТЬ біндити 0.0.0.0.
       Server__Host: "0.0.0.0"
       Server__Port: "9000"
+      # D4 (fail-closed): не-loopback bind дозволений лише зі свідомим opt-in оператора + TLS попереду.
+      # Тут це безпечно, бо порт опублікований лише на 127.0.0.1 хоста, а TLS термінується reverse-proxy.
+      Server__AllowNonLoopback: "true"
+      Server__Tls__Enabled: "true"
+      # Durable-стан (lockfile, SQLite-стор, авто-згенеровані секрети) — на змонтованому томі.
+      # Том МУСИТЬ бути платформно-шифрованим (R3.7/S2 — at-rest шифрування платформи, не app-LUKS).
+      Persistence__DataDirectory: "/data"
       SignalCli__StoragePathCli: "/data/SignalCliStorageData"
       Logging__LogLevel__Default: "Information"
     volumes:
-      # Linked-account keys + signal-cli state. Keep this volume safe — it IS the
-      # linked device. Losing it means re-linking from the phone.
+      # Linked-account keys + signal-cli state + durable-стор + секрети. Keep this volume safe — it
+      # IS the linked device (втрата = повторна прив'язка з телефона). Монтуйте на ENCRYPTED-том.
       - signalcli-data:/data
 
 volumes:

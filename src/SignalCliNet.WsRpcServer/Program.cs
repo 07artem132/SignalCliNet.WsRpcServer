@@ -23,6 +23,11 @@ public static class Program
 
                 services.AddSignalEvents();
 
+                // Секюр-деплой/durable-фундамент (G1 lock, D4 fail-closed, auto-gen секретів, стор).
+                // Реєструємо ДО AddSignalJsonRpc, щоб його hosted-service стартував першим (захопив lock
+                // і провалідував bind перед підняттям RPC-транспорту).
+                services.AddSecureDeployment(hostContext.Configuration);
+
                 services.AddSignalJsonRpc(options =>
                 {
                     var serverSection = hostContext.Configuration.GetSection("Server");

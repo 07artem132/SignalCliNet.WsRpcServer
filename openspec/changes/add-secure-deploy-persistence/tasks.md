@@ -1,10 +1,10 @@
 # Tasks: add-secure-deploy-persistence
 
 ## 1. Startup-гарантії
-- [ ] 1.1 G1: data-dir lockfile → refuse-start при held; `replicas=1` у compose/docs; downtime-window задокументований (W15)
-- [ ] 1.2 D4: startup-assertion (не-loopback + (no-auth АБО no-TLS) → відмова стартувати)
-- [ ] 1.3 A3: `ValidateOnStart` + `[OptionsValidator]` для auth/TLS/rate-limit конфіги
-- [ ] 1.4 D17: `LimitCORE=0`; секрети не потрапляють у dump-шляхи
+- [x] 1.1 G1: data-dir lockfile → refuse-start при held; `replicas=1` у compose/docs; downtime-window задокументований (W15)
+- [x] 1.2 D4: startup-assertion (не-loopback + (no-auth АБО no-TLS) → відмова стартувати)
+- [x] 1.3 A3: `ValidateOnStart` + `[OptionsValidator]` для auth/TLS/rate-limit конфіги
+- [x] 1.4 D17: `LimitCORE=0`; секрети не потрапляють у dump-шляхи
 
 ## 2. Auto-gen секретів (R3.4/R3.7)
 - [ ] 2.1 First-boot: CA + server-cert + пеппери → encrypted-том, `0600`, persist-once
