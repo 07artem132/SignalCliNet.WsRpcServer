@@ -26,10 +26,10 @@ public class SessionAuthStateMachineTests
         Assert.Equal(SessionAuthState.AwaitingAuthenticate, machine.State);
     }
 
-    // ---------- Happy path: валідний токен (upgrade АБО fallback authenticate) ----------
+    // ---------- Happy path: валідний токен → PoPPending → успішний PoP → Active ----------
 
     [Fact]
-    public void ValidToken_ThroughTransientPoP_ReachesActive()
+    public void ValidToken_ThenPopSucceeded_ReachesActive()
     {
         var machine = new SessionAuthStateMachine(authEnabled: true);
 
@@ -37,9 +37,68 @@ public class SessionAuthStateMachineTests
         Assert.False(afterToken.ShouldClose);
         Assert.Equal(SessionAuthState.PoPPending, machine.State);
 
-        var afterPoP = machine.CompletePoP();
+        var afterPoP = machine.OnPopSucceeded();
+        Assert.False(afterPoP.ShouldClose);
         Assert.Equal(SessionAuthState.Active, afterPoP.NextState);
         Assert.Equal(SessionAuthState.Active, machine.State);
+    }
+
+    // ---------- Провал PoP: PoPPending → 4401 pop-failed ----------
+
+    [Fact]
+    public void PopFailed_WhilePoPPending_Closes4401PopFailed()
+    {
+        var machine = new SessionAuthStateMachine(authEnabled: true);
+        machine.OnTokenValidated(TokenAuthenticationStatus.Valid); // → PoPPending
+
+        var decision = machine.OnPopFailed();
+
+        Assert.True(decision.ShouldClose);
+        Assert.Equal(AuthCloseCodes.TokenRejected, decision.CloseCode);
+        Assert.Equal(4401, decision.CloseCode);
+        Assert.Equal(AuthCloseReasons.PopFailed, decision.Reason);
+        Assert.Equal("pop-failed", decision.Reason);
+        Assert.Equal(SessionAuthState.Closed, machine.State);
+    }
+
+    [Fact]
+    public void PopSucceeded_WhenNotPoPPending_IsNoOp()
+    {
+        // До входу в PoPPending успіх PoP нічого не робить (перший перехід виграє).
+        var machine = new SessionAuthStateMachine(authEnabled: true);
+
+        var decision = machine.OnPopSucceeded();
+
+        Assert.False(decision.ShouldClose);
+        Assert.Equal(SessionAuthState.AwaitingAuthenticate, machine.State);
+    }
+
+    [Fact]
+    public void PopFailed_WhenNotPoPPending_IsNoOp()
+    {
+        var machine = new SessionAuthStateMachine(authEnabled: true);
+
+        var decision = machine.OnPopFailed();
+
+        Assert.False(decision.ShouldClose);
+        Assert.Equal(SessionAuthState.AwaitingAuthenticate, machine.State);
+    }
+
+    // ---------- D8-пін: у PoPPending будь-що, крім pop.prove (в т.ч. повторний authenticate) → close ----------
+
+    [Fact]
+    public void UnknownMethod_WhilePoPPending_Closes4401Invalid()
+    {
+        var machine = new SessionAuthStateMachine(authEnabled: true);
+        machine.OnTokenValidated(TokenAuthenticationStatus.Valid); // → PoPPending
+
+        // Сесія маршрутизує лише pop.prove у HandlePopProve; будь-що інше йде сюди й закриває сокет.
+        var decision = machine.OnUnknownPreAuthMethod();
+
+        Assert.True(decision.ShouldClose);
+        Assert.Equal(AuthCloseCodes.TokenRejected, decision.CloseCode);
+        Assert.Equal(AuthCloseReasons.Invalid, decision.Reason);
+        Assert.Equal(SessionAuthState.Closed, machine.State);
     }
 
     // ---------- Невалідний / прострочений / revoked токен → 4401 + машиночитний reason ----------
@@ -107,7 +166,7 @@ public class SessionAuthStateMachineTests
     {
         var machine = new SessionAuthStateMachine(authEnabled: true);
         machine.OnTokenValidated(TokenAuthenticationStatus.Valid);
-        machine.CompletePoP(); // → Active
+        machine.OnPopSucceeded(); // → Active
 
         var decision = machine.OnAuthTimeout();
 
@@ -122,7 +181,7 @@ public class SessionAuthStateMachineTests
     {
         var machine = new SessionAuthStateMachine(authEnabled: true);
         machine.OnTokenValidated(TokenAuthenticationStatus.Valid);
-        machine.CompletePoP(); // → Active
+        machine.OnPopSucceeded(); // → Active
 
         var decision = machine.OnRevoked();
 

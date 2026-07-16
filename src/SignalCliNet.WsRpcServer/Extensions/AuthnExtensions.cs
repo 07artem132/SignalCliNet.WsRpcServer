@@ -45,6 +45,11 @@ public static class AuthnExtensions
         services.TryAddSingleton<UnauthenticatedConnectionLimiter>();
         services.TryAddSingleton<RevocationBroadcaster>();
 
+        // PoP + enrollment (секція 3): per-identity rate-limit renewal (T5) + enrollment-сервіс (D1).
+        // DevicePopVerifier — статичний (без реєстрації).
+        services.TryAddSingleton<RenewalRateLimiter>();
+        services.TryAddSingleton<DeviceEnrollmentService>();
+
         // Системний час — інжектимо через TimeProvider (тести підміняють фіксованим).
         services.TryAddSingleton(TimeProvider.System);
 

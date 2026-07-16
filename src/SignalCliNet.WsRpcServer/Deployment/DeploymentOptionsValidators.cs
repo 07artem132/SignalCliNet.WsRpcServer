@@ -15,7 +15,8 @@ internal sealed partial class PersistenceOptionsValidator : IValidateOptions<Per
 internal sealed partial class TransportSecurityOptionsValidator : IValidateOptions<TransportSecurityOptions>;
 
 /// <summary>Compile-time validator for <see cref="AuthOptions"/> (DataAnnotations [Range] bounds).</summary>
-// Межові правила (TtlHours 1..168, TimeoutSeconds 3..120, MaxUnauthenticatedPerIp 1..1024) — через
-// [Range] на властивостях. Per-element формат AllowedOrigins валідується .Validate(...) у AddAuthnCore.
+// Межові правила (TtlHours 1..168, TimeoutSeconds 3..120, MaxUnauthenticatedPerIp 1..1024,
+// RenewalPerIdentityPerHour 1..60) — через [Range] на властивостях. Per-element формат AllowedOrigins
+// валідується .Validate(...) у AddAuthnCore.
 [OptionsValidator]
 internal sealed partial class AuthOptionsValidator : IValidateOptions<AuthOptions>;

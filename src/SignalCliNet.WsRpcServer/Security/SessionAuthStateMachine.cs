@@ -4,8 +4,9 @@ namespace SignalCliNet.WsRpcServer.Security;
 /// <remarks>
 /// <c>4401</c> — зарезервований під token-відмови T4 (invalid/expired/revoked): синтаксично валідний,
 /// але непридатний токен закриває сокет in-band, щоб браузер відрізнив re-auth від мережевого фейлу.
-/// <c>4408</c> — окремий код для auth-таймауту (сесія не стала Active за відведений час), щоб не
-/// плутати таймаут із token-відмовою.
+/// Той самий код несе окремий reason <c>pop-failed</c> — коли токен був валідний, але зламався
+/// PoP-крок (підпис/device-ключ). <c>4408</c> — окремий код для auth-таймауту (сесія не стала Active
+/// за відведений час, у т.ч. не надіслала <c>pop.prove</c>), щоб не плутати таймаут із token-відмовою.
 /// </remarks>
 public static class AuthCloseCodes
 {
@@ -27,6 +28,13 @@ public static class AuthCloseReasons
 
     /// <summary>Token (or its identity) has been revoked.</summary>
     public const string Revoked = "revoked";
+
+    /// <summary>
+    /// Proof-of-possession failed after a valid token: bad signature, no enrolled device key, or the
+    /// device key is revoked. Distinct from the token-status vocabulary (invalid/expired/revoked) —
+    /// the token itself resolved as valid; the PoP step is what rejected the connection.
+    /// </summary>
+    public const string PopFailed = "pop-failed";
 
     /// <summary>The session did not authenticate within the auth timeout.</summary>
     public const string AuthTimeout = "auth-timeout";
@@ -91,10 +99,11 @@ public sealed class SessionAuthStateMachine
     }
 
     /// <summary>
-    /// Completes the (section-2 transient) PoP step: <see cref="SessionAuthState.PoPPending"/> ⇒
-    /// <see cref="SessionAuthState.Active"/>. Section 3 replaces this with a real challenge.
+    /// A verified proof-of-possession signature: <see cref="SessionAuthState.PoPPending"/> ⇒
+    /// <see cref="SessionAuthState.Active"/>. The session verifies the device-key signature and re-checks
+    /// token liveness BEFORE calling this; a no-op if the state already left PoPPending (timeout/teardown).
     /// </summary>
-    public AuthDecision CompletePoP()
+    public AuthDecision OnPopSucceeded()
     {
         if (State != SessionAuthState.PoPPending)
             return AuthDecision.To(State);
@@ -104,7 +113,23 @@ public sealed class SessionAuthStateMachine
     }
 
     /// <summary>
-    /// A pre-auth message whose method is not <c>authenticate</c> ⇒ close <c>4401</c> <c>invalid</c>.
+    /// A failed proof-of-possession (bad signature, no enrolled device key, or revoked key):
+    /// <see cref="SessionAuthState.PoPPending"/> ⇒ close <c>4401</c> <c>pop-failed</c>. One attempt per
+    /// challenge — there is no re-issue. A no-op once the state already left PoPPending.
+    /// </summary>
+    public AuthDecision OnPopFailed()
+    {
+        if (State != SessionAuthState.PoPPending)
+            return AuthDecision.To(State);
+
+        return Close(AuthCloseCodes.TokenRejected, AuthCloseReasons.PopFailed);
+    }
+
+    /// <summary>
+    /// A pre-auth message whose method is not the one expected in the current state ⇒ close <c>4401</c>
+    /// <c>invalid</c>. In <see cref="SessionAuthState.AwaitingAuthenticate"/> only <c>authenticate</c> is
+    /// accepted; in <see cref="SessionAuthState.PoPPending"/> only <c>pop.prove</c> is (a second
+    /// <c>authenticate</c> is rejected here). RPC methods are structurally unreachable pre-auth (D8).
     /// </summary>
     public AuthDecision OnUnknownPreAuthMethod()
     {

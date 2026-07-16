@@ -1,6 +1,8 @@
 using System.Buffers;
+using System.Buffers.Text;
 using System.Net;
 using System.Net.WebSockets;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
@@ -45,12 +47,13 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
     private readonly WebSocketMessageHandler _messageHandler;
     private readonly JsonRpcServerConfig _config;
 
-    // Section 2 auth-залежності (усі singletons/options з DI).
+    // Section 2/3 auth-залежності (усі singletons/options з DI).
     private readonly AuthOptions _authOptions;
     private readonly TokenService _tokenService;
     private readonly IDurableStore _store;
     private readonly UnauthenticatedConnectionLimiter _unauthLimiter;
     private readonly RevocationBroadcaster _revocationBroadcaster;
+    private readonly RenewalRateLimiter _renewalRateLimiter;
 
     // Чиста стан-машина переходів; доступ серіалізуємо через _authLock (сесію смикають кілька потоків:
     // accept-шлях, IO-потік, callback таймера, callback revoke).
@@ -65,6 +68,14 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
     private string? _identityId;
     private IDisposable? _revocationSubscription;
     private Timer? _authTimer;
+
+    // PoP-стан (section 3): живе лише в пам'яті сесії між pop.challenge і pop.prove. Nonce one-time
+    // (одна спроба на challenge), TTL = загальний auth-таймаут (4408 покриває, окремого таймера не треба).
+    private string? _popNonce;             // base64url-рядок nonce, як надіслано у challenge
+    private string? _popConnId;            // connId, до якого прив'язаний підпис (session Id)
+    private IdentityRecord? _popIdentity;  // identity, що проходить PoP
+    private string? _popTokenHash;         // at-rest hash токена (для normal — свій; для renewal — старий)
+    private bool _popPendingRenewal;       // true ⇒ T5: успішний PoP ротує прострочений токен
 
     private Task? _processingTask;
 
@@ -83,7 +94,8 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
         TokenService tokenService,
         IDurableStore store,
         UnauthenticatedConnectionLimiter unauthLimiter,
-        RevocationBroadcaster revocationBroadcaster)
+        RevocationBroadcaster revocationBroadcaster,
+        RenewalRateLimiter renewalRateLimiter)
         : base(server, logger, config)
     {
         _eventProcessor = eventProcessor ?? throw new ArgumentNullException(nameof(eventProcessor));
@@ -95,6 +107,7 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _unauthLimiter = unauthLimiter ?? throw new ArgumentNullException(nameof(unauthLimiter));
         _revocationBroadcaster = revocationBroadcaster ?? throw new ArgumentNullException(nameof(revocationBroadcaster));
+        _renewalRateLimiter = renewalRateLimiter ?? throw new ArgumentNullException(nameof(renewalRateLimiter));
 
         _authMachine = new SessionAuthStateMachine(_authOptions.Enabled);
 
@@ -237,10 +250,10 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
 
         if (_pendingToken is not null)
         {
-            // Токен був на upgrade → автентифікуємо тут (in-band, T4).
+            // Токен був на upgrade → автентифікуємо тут (in-band, T4). Валідний → pop.challenge (PoPPending).
             var result = _tokenService.Authenticate(_pendingToken);
             _pendingToken = null;   // REDACT: більше не тримаємо plaintext
-            ResolveToken(result, ackId: null);
+            ResolveToken(result, fromFallback: false);
             return;
         }
 
@@ -314,12 +327,15 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
         Logger.LogDebug("RPC methods registered for client {ClientId}", Id);
     }
 
-    // Розв'язує presented-токен (з upgrade АБО з fallback authenticate) у активацію чи close-4401.
-    // ackId != null ⇒ це fallback-шлях, треба надіслати JSON-RPC result {"status":"ok"} для того id.
-    private void ResolveToken(TokenAuthenticationResult result, JsonElement? ackId)
+    // Розв'язує presented-токен (з upgrade АБО з fallback authenticate). Валідний токен → pop.challenge
+    // (PoPPending); прострочений у fallback-шляху з живим device-ключем і в межах rate-limit → pop.challenge
+    // на renewal (T5); інакше — close 4401 з машиночитним reason. fromFallback=true ⇒ це повідомлення
+    // authenticate (не upgrade-субпротокол) — renewal доступний ЛИШЕ звідси (upgrade expired → 4401 expired).
+    private void ResolveToken(TokenAuthenticationResult result, bool fromFallback)
     {
-        // Downgrade Valid→Invalid, якщо identity відсутня у сторі (токен трактуємо як невалідний).
         var status = result.Status;
+
+        // Valid: identity мусить існувати у сторі, інакше токен трактуємо як невалідний.
         IdentityRecord? identity = null;
         if (status == TokenAuthenticationStatus.Valid)
         {
@@ -328,41 +344,162 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
                 status = TokenAuthenticationStatus.Invalid;
         }
 
-        // TODO(task 3.5 / T5): у fallback-шляху (ackId != null) прострочений (НЕ revoked) токен + успішний
-        // PoP device-ключем має видавати НОВИЙ токен (ротація W21), а не закриватись 4401. Секція 2 (без
-        // PoP) поки що закриває expired як 4401 `expired`.
+        // T5 renewal: прострочений (НЕ revoked — revoke виграє ще в Authenticate) токен через fallback
+        // authenticate, за наявності живого device-секрету й у межах rate-limit → замість close видаємо
+        // pop.challenge із прапорцем pending-renewal. Інакше (нема ключа / rate-limit) → close 4401 expired.
+        var pendingRenewal = false;
+        if (status == TokenAuthenticationStatus.Expired && fromFallback)
+        {
+            identity = _store.GetIdentity(result.IdentityId!);
+            if (identity is not null && HasLiveDeviceSecret(identity.Id) &&
+                _renewalRateLimiter.TryAcquire(identity.Id))
+            {
+                pendingRenewal = true;
+            }
+            else
+            {
+                identity = null;   // не кваліфікувались → close 4401 expired нижче
+                Logger.LogInformation(
+                    "Сесія {ClientId}: renewal недоступний (нема живого device-ключа або перевищено rate-limit) — close 4401 expired.",
+                    Id);
+            }
+        }
+
+        // Валідний токен АБО кваліфікований renewal → PoPPending; інакше — close-рішення за статусом.
         AuthDecision decision;
         lock (_authLock)
         {
-            decision = _authMachine.OnTokenValidated(status);
-            if (decision.NextState == SessionAuthState.PoPPending)
-                decision = _authMachine.CompletePoP();   // section 2: PoP — транзитний no-op
+            decision = status == TokenAuthenticationStatus.Valid || pendingRenewal
+                ? _authMachine.OnTokenValidated(TokenAuthenticationStatus.Valid)   // → PoPPending
+                : _authMachine.OnTokenValidated(status);                            // → close 4401 reason
         }
 
-        if (decision.NextState == SessionAuthState.Active)
-        {
-            var principal = new SignalPrincipal(
-                name: identity!.Id,
-                isAdmin: string.Equals(identity.Role, "admin", StringComparison.Ordinal),
-                hasFullAccess: false,
-                allowedAccounts: identity.LinkedAccounts,
-                allowedGroupIds: []);
-
-            _tokenHash = result.TokenHash;
-            _identityId = identity.Id;
-
-            // Підписка на in-process revoke: revoke identity → close 4401 `revoked` живого конекту (1.4).
-            _revocationSubscription = _revocationBroadcaster.Subscribe(identity.Id, OnIdentityRevoked);
-
-            if (ackId is not null)
-                SendAuthenticateAck(ackId.Value);
-
-            ActivateSession(principal);
-        }
+        if (decision.NextState == SessionAuthState.PoPPending)
+            BeginPopChallenge(identity!, result.TokenHash!, pendingRenewal);
         else if (decision.ShouldClose)
-        {
             CloseAuth(decision.CloseCode, decision.Reason ?? AuthCloseReasons.Invalid);
+    }
+
+    // Готує PoP-стан і надсилає pop.challenge (nonce ‖ connId). Стартує auth-таймер, якщо він ще не йде
+    // (upgrade-шлях: таймера не було; fallback-шлях: таймер уже тикає з OnWsConnected — TTL той самий, 4408).
+    private void BeginPopChallenge(IdentityRecord identity, string tokenHash, bool pendingRenewal)
+    {
+        // Nonce: 32 байти CSPRNG (256-bit, ≥128-bit за G8) у base64url — саме цей рядок увійде в pre-image
+        // підпису. Прив'язка до connId (session Id) робить підпис bound до з'єднання (релей ламається).
+        var nonce = Base64Url.EncodeToString(RandomNumberGenerator.GetBytes(32));
+        var connId = Id.ToString();
+
+        _popNonce = nonce;
+        _popConnId = connId;
+        _popIdentity = identity;
+        _popTokenHash = tokenHash;
+        _popPendingRenewal = pendingRenewal;
+
+        EnsureAuthTimer();
+        SendPopChallenge(nonce, connId);
+
+        Logger.LogInformation(
+            "Сесія {ClientId}: видано pop.challenge (identity {IdentityId}, renewal={Renewal}).",
+            Id, identity.Id, pendingRenewal);
+    }
+
+    // Обробляє pop.prove: верифікує підпис device-ключем над (nonce ‖ connId), re-чек liveness токена й
+    // активує сесію (для renewal — ротує прострочений токен у W21-транзакції). Nonce one-time: будь-який
+    // провал → close (pop-failed/revoked), без re-issue challenge.
+    private void HandlePopProve(string? signature, JsonElement? ackId)
+    {
+        // 1. Верифікація підпису: потрібен зареєстрований, НЕзреволкнутий device-ключ + валідний підпис.
+        var deviceSecret = _popIdentity is null ? null : _store.GetDeviceSecret(_popIdentity.Id);
+        var verified =
+            deviceSecret is not null &&
+            !deviceSecret.IsRevoked &&
+            DevicePopVerifier.Verify(
+                deviceSecret.PublicKey, _popNonce ?? string.Empty, _popConnId ?? string.Empty,
+                signature ?? string.Empty);
+
+        if (!verified)
+        {
+            AuthDecision failed;
+            lock (_authLock)
+            {
+                failed = _authMachine.OnPopFailed();
+            }
+
+            if (failed.ShouldClose)
+                CloseAuth(failed.CloseCode, failed.Reason ?? AuthCloseReasons.PopFailed);
+            return;
         }
+
+        // 2. Re-чек liveness ПЕРЕД активацією: revoke міг статись під час handshake (D7 — revoke виграє).
+        //    Ротацію відкладаємо до виграшу переходу (крок 3), щоб гонка з timeout не лишила клієнта без
+        //    нового токена (старий revoked, новий загублений).
+        if (_popPendingRenewal)
+        {
+            var old = _store.GetToken(_popTokenHash!);
+            if (old is null || old.IsRevoked)
+            {
+                CloseAuth(AuthCloseCodes.TokenRejected, AuthCloseReasons.Revoked);
+                return;
+            }
+        }
+        else if (!_tokenService.IsLive(_popTokenHash!))
+        {
+            // Normal-шлях: токен був Valid — мертвий (revoked/протух під час handshake) → 4401 revoked.
+            CloseAuth(AuthCloseCodes.TokenRejected, AuthCloseReasons.Revoked);
+            return;
+        }
+
+        // 3. Виграємо перехід PoPPending → Active атомарно; лише переможець ротує/активує.
+        AuthDecision decision;
+        lock (_authLock)
+        {
+            decision = _authMachine.OnPopSucceeded();
+        }
+
+        if (decision.NextState != SessionAuthState.Active)
+            return;   // гонка: timeout/teardown уже закрив сесію — токен не чіпаємо
+
+        // 4. Renewal-ротація (лише після виграшу): W21 — старий revoked + новий у одній транзакції.
+        string? renewedToken = null;
+        if (_popPendingRenewal)
+        {
+            var (newToken, newRecord) = _tokenService.Rotate(
+                _popTokenHash!, _popIdentity!.Id, TimeSpan.FromHours(_authOptions.TokenTtlHours));
+            _tokenHash = newRecord.TokenHash;
+            renewedToken = newToken;
+        }
+        else
+        {
+            _tokenHash = _popTokenHash;
+        }
+
+        // 5. Активація: principal, revoke-підписка, ack pop.prove, старт диспетч-стеку.
+        var identity = _popIdentity!;
+        _identityId = identity.Id;
+
+        var principal = new SignalPrincipal(
+            name: identity.Id,
+            isAdmin: string.Equals(identity.Role, "admin", StringComparison.Ordinal),
+            hasFullAccess: false,
+            allowedAccounts: identity.LinkedAccounts,
+            allowedGroupIds: []);
+
+        // Підписка на in-process revoke: revoke identity → close 4401 `revoked` живого конекту (1.4).
+        _revocationSubscription = _revocationBroadcaster.Subscribe(identity.Id, OnIdentityRevoked);
+
+        // Ack pop.prove: {"status":"ok"} (+ новий token для renewal), лише якщо клієнт надіслав id.
+        if (ackId is not null)
+            SendPopAck(ackId.Value, renewedToken);
+
+        ClearPopState();
+        ActivateSession(principal);
+    }
+
+    // Наявність живого (НЕзреволкнутого) device-секрету — передумова renewal.
+    private bool HasLiveDeviceSecret(string identityId)
+    {
+        var secret = _store.GetDeviceSecret(identityId);
+        return secret is not null && !secret.IsRevoked;
     }
 
     /// <summary>
@@ -410,6 +547,7 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
 
         ReleaseUnauthSlot();
         StopAuthTimer();
+        ClearPopState();   // nonce one-time — не лишаємо в пам'яті після teardown
         _revocationSubscription?.Dispose();
         _revocationSubscription = null;
 
@@ -500,9 +638,10 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
         }
     }
 
-    // Обробник pre-auth повідомлення: приймаємо РІВНО {"jsonrpc":"2.0","id":N,"method":"authenticate",
-    // "params":{"token":"..."}}. Будь-який інший метод / малформ / завеликий розмір → close 4401.
-    // REDACT: тіло цього повідомлення містить токен у params.token — його НІКОЛИ не логувати.
+    // Обробник pre-auth повідомлення. Один допустимий метод на стан: у AwaitingAuthenticate — authenticate
+    // (params.token); у PoPPending — pop.prove (params.signature). Будь-що інше (в т.ч. authenticate вдруге
+    // у PoPPending) / малформ / завеликий розмір → close 4401. REDACT: тіло містить token/signature —
+    // його НІКОЛИ не логувати.
     private void HandlePreAuthMessage(byte[] buffer, long offset, long size)
     {
         if (size > PreAuthMaxBytes)
@@ -514,6 +653,7 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
 
         string? method = null;
         string? token = null;
+        string? signature = null;
         JsonElement? ackId = null;
         try
         {
@@ -525,9 +665,13 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
                     method = m.GetString();
                 if (root.TryGetProperty("id", out var idEl))
                     ackId = idEl.Clone();   // detach: doc диспоузиться в кінці using
-                if (root.TryGetProperty("params", out var p) && p.ValueKind == JsonValueKind.Object &&
-                    p.TryGetProperty("token", out var t) && t.ValueKind == JsonValueKind.String)
-                    token = t.GetString();
+                if (root.TryGetProperty("params", out var p) && p.ValueKind == JsonValueKind.Object)
+                {
+                    if (p.TryGetProperty("token", out var t) && t.ValueKind == JsonValueKind.String)
+                        token = t.GetString();
+                    if (p.TryGetProperty("signature", out var s) && s.ValueKind == JsonValueKind.String)
+                        signature = s.GetString();
+                }
             }
         }
         catch (JsonException)
@@ -536,27 +680,73 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
             return;
         }
 
-        if (!string.Equals(method, "authenticate", StringComparison.Ordinal))
+        SessionAuthState state;
+        lock (_authLock)
         {
-            // Будь-який інший метод у pre-auth стані → close 4401 invalid.
-            AuthDecision d;
-            lock (_authLock)
-            {
-                d = _authMachine.OnUnknownPreAuthMethod();
-            }
+            state = _authMachine.State;
+        }
 
-            if (d.ShouldClose)
-                CloseAuth(d.CloseCode, d.Reason ?? AuthCloseReasons.Invalid);
+        // PoPPending: єдиний допустимий метод — pop.prove. authenticate вдруге / будь-що інше → close.
+        if (state == SessionAuthState.PoPPending)
+        {
+            if (string.Equals(method, "pop.prove", StringComparison.Ordinal))
+                HandlePopProve(signature, ackId);
+            else
+                CloseUnknownPreAuthMethod();
             return;
         }
 
-        var result = _tokenService.Authenticate(token);
-        // token більше не потрібен — не логуємо і не зберігаємо plaintext.
-        ResolveToken(result, ackId);
+        // AwaitingAuthenticate: єдиний допустимий метод — authenticate (з токеном у params).
+        if (string.Equals(method, "authenticate", StringComparison.Ordinal))
+        {
+            var result = _tokenService.Authenticate(token);
+            // token більше не потрібен — не логуємо і не зберігаємо plaintext.
+            ResolveToken(result, fromFallback: true);
+            return;
+        }
+
+        CloseUnknownPreAuthMethod();
     }
 
-    // Надсилає JSON-RPC result {"status":"ok"} для authenticate-запиту (лише fallback-шлях).
-    private void SendAuthenticateAck(JsonElement id)
+    // Спільний close-шлях для неочікуваного pre-auth методу (через стан-машину → 4401 invalid).
+    private void CloseUnknownPreAuthMethod()
+    {
+        AuthDecision decision;
+        lock (_authLock)
+        {
+            decision = _authMachine.OnUnknownPreAuthMethod();
+        }
+
+        if (decision.ShouldClose)
+            CloseAuth(decision.CloseCode, decision.Reason ?? AuthCloseReasons.Invalid);
+    }
+
+    // Надсилає JSON-RPC notification pop.challenge (без id): {"jsonrpc":"2.0","method":"pop.challenge",
+    // "params":{"nonce":"<base64url>","connId":"<Guid>"}}. Сирий pre-auth кадр (як існуючі ack) —
+    // будуємо вручну Utf8JsonWriter-ом, не через загальний серіалізатор.
+    private void SendPopChallenge(string nonce, string connId)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("jsonrpc", "2.0");
+            writer.WriteString("method", "pop.challenge");
+            writer.WritePropertyName("params");
+            writer.WriteStartObject();
+            writer.WriteString("nonce", nonce);
+            writer.WriteString("connId", connId);
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+        }
+
+        SendTextAsync(buffer.WrittenSpan);
+    }
+
+    // Надсилає result-ack pop.prove: {"status":"ok"} (+ "token":"<новий plaintext>" для renewal, T5).
+    // Будуємо ВРУЧНУ Utf8JsonWriter-ом — plaintext-токен НЕ проходить через загальний серіалізатор і
+    // НІКОЛИ не логується.
+    private void SendPopAck(JsonElement id, string? renewedToken)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(buffer))
@@ -568,11 +758,23 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
             writer.WritePropertyName("result");
             writer.WriteStartObject();
             writer.WriteString("status", "ok");
+            if (renewedToken is not null)
+                writer.WriteString("token", renewedToken);
             writer.WriteEndObject();
             writer.WriteEndObject();
         }
 
         SendTextAsync(buffer.WrittenSpan);
+    }
+
+    // Чистить PoP-стан (nonce one-time — після завершення handshake більше не потрібен).
+    private void ClearPopState()
+    {
+        _popNonce = null;
+        _popConnId = null;
+        _popIdentity = null;
+        _popTokenHash = null;
+        _popPendingRenewal = false;
     }
 
     // Закриває сесію auth-close-кодом (4401 token-відмова / 4408 таймаут) із машиночитним reason у payload.
@@ -610,6 +812,15 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
     {
         var timeout = TimeSpan.FromSeconds(_authOptions.AuthTimeoutSeconds);
         _authTimer = new Timer(_ => OnAuthTimeout(), null, timeout, Timeout.InfiniteTimeSpan);
+    }
+
+    // Стартує auth-таймер лише якщо він ще не йде. Fallback-шлях уже запустив його в OnWsConnected (TTL
+    // покриває і очікування authenticate, і подальший PoP); upgrade-шлях запускає його тут — при видачі
+    // challenge. Викликається на handshake-потоці, тож перевірка-і-старт без гонки.
+    private void EnsureAuthTimer()
+    {
+        if (_authTimer is null)
+            StartAuthTimer();
     }
 
     private void OnAuthTimeout()

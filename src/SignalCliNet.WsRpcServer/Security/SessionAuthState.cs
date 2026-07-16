@@ -19,9 +19,11 @@ public enum SessionAuthState
     AwaitingAuthenticate,
 
     /// <summary>
-    /// A token has authenticated; a proof-of-possession challenge is pending. In section 2 this state is
-    /// a transient no-op (advances straight to <see cref="Active"/>); section 3 inserts a real
-    /// device-key challenge here before any RPC is allowed.
+    /// A token has authenticated; a proof-of-possession challenge is outstanding. The server has sent a
+    /// <c>pop.challenge</c> and awaits a <c>pop.prove</c> whose device-key signature it verifies before
+    /// activating. No RPC is allowed in this state (D8); only <c>pop.prove</c> is accepted, and the auth
+    /// timeout (<c>4408</c>) bounds the wait. Also used for T5 token renewal (expired token + live device
+    /// key), where a successful proof rotates the token instead of merely activating.
     /// </summary>
     PoPPending,
 

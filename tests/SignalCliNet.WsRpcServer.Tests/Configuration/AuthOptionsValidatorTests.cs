@@ -16,6 +16,7 @@ public class AuthOptionsValidatorTests
         TokenTtlHours = 12,
         AuthTimeoutSeconds = 10,
         MaxUnauthenticatedPerIp = 8,
+        RenewalPerIdentityPerHour = 4,
         AllowedOrigins = [],
     };
 
@@ -68,6 +69,28 @@ public class AuthOptionsValidatorTests
         options.MaxUnauthenticatedPerIp = max;
 
         Assert.True(new AuthOptionsValidator().Validate(null, options).Failed);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(61)]
+    public void RenewalPerIdentityPerHour_OutOfRange_Fails(int perHour)
+    {
+        var options = Valid();
+        options.RenewalPerIdentityPerHour = perHour;
+
+        Assert.True(new AuthOptionsValidator().Validate(null, options).Failed);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(60)]
+    public void RenewalPerIdentityPerHour_Boundaries_AreValid(int perHour)
+    {
+        var options = Valid();
+        options.RenewalPerIdentityPerHour = perHour;
+
+        Assert.True(new AuthOptionsValidator().Validate(null, options).Succeeded);
     }
 
     [Theory]

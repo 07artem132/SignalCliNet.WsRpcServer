@@ -41,6 +41,14 @@ public sealed class AuthOptions
     public int MaxUnauthenticatedPerIp { get; set; } = 8;
 
     /// <summary>
+    /// Maximum token renewals (T5) allowed per identity per rolling hour (1..60). Default 4. Once an
+    /// identity exhausts this budget, renewal is temporarily unavailable and the expired token closes
+    /// <c>4401</c> <c>expired</c> as usual (revocation remains the primary guarantee, D7).
+    /// </summary>
+    [Range(1, 60)]
+    public int RenewalPerIdentityPerHour { get; set; } = 4;
+
+    /// <summary>
     /// Exact-match Origin allowlist (defense-in-depth, NOT authentication; C3). Each entry MUST be an
     /// absolute origin <c>scheme://host[:port]</c> without a trailing '/'. An empty allowlist rejects
     /// every browser (Origin-bearing) request — fail-closed. Requests without an <c>Origin</c> header
