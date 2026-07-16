@@ -1,10 +1,10 @@
 # Tasks: add-authz-chokepoint
 
 ## 1. Chokepoint
-- [ ] 1.1 Декларативний реєстр політик (незалежний від дискавері); незареєстрований метод → `-32601` до виконання
-- [ ] 1.2 `SignalRpcSession`: `AuthorizingJsonRpc` замість голого `new JsonRpc`; `Principal` на сесії (V9)
-- [ ] 1.3 Principal per-invocation з call-context; жодного per-user стану в адаптерах (V8)
-- [ ] 1.4 Упорядкувати teardown сесії перед auth-стан-машиною: без `async void`/fire-and-forget на критичному шляху (A4)
+- [x] 1.1 Декларативний реєстр політик (незалежний від дискавері); незареєстрований метод → `-32601` до виконання
+- [x] 1.2 `SignalRpcSession`: `AuthorizingJsonRpc` замість голого `new JsonRpc`; `Principal` на сесії (V9)
+- [x] 1.3 Principal per-invocation з call-context; жодного per-user стану в адаптерах (V8)
+- [x] 1.4 Упорядкувати teardown сесії перед auth-стан-машиною: без `async void`/fire-and-forget на критичному шляху (A4)
 
 ## 2. IDOR-guards
 - [ ] 2.1 `AssertAccountAllowed(principal, targetAccount)` на кожному account-bearing методі (W8)

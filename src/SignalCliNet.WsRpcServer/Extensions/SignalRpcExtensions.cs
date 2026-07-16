@@ -3,6 +3,7 @@ using SignalCli.Models.Signal.Events;
 using SignalCliNet.WsRpcServer.Events;
 using SignalCliNet.WsRpcServer.Interfaces;
 using SignalCliNet.WsRpcServer.Model;
+using SignalCliNet.WsRpcServer.Security;
 using SignalCliNet.WsRpcServer.Services;
 using SignalCliNet.WsRpcServer.Subscriptions;
 using WsRpcServer.Core;
@@ -31,6 +32,10 @@ public static class SignalRpcExtensions
         services.AddSingleton<ISubscriptionManager<SignalEventTypes, BaseSignalEventArgs>, SubscriptionManager>();
         services.AddSingleton<IEventProcessor, EventProcessor>();
         services.AddSingleton<IRpcServiceRegistry, RpcServiceRegistry>();
+
+        // Pre-dispatch authorization chokepoint: декларативний реєстр політик (default-deny),
+        // незалежний від авто-дискавері. Singleton — таблиця незмінна на весь час життя процесу.
+        services.AddSingleton<IRpcPolicyRegistry, SignalRpcPolicyRegistry>();
 
         // RPC adapters
         services.AddScoped<ISignalAccountsRpc, SignalAccountsRpcAdapter>();
