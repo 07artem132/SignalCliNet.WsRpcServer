@@ -18,8 +18,8 @@
 - [x] 3.3 Build-guard: збірка/CI падає на RPC-методі без явної політики (W23)
 
 ## 4. Тести (з DoD Фази 2)
-- [ ] 4.1 Default-deny: незареєстрований метод → `-32601` без виконання
-- [ ] 4.2 Inbound IDOR: A називає account B → відмова
-- [ ] 4.3 Outbound IDOR: `listAccounts`/`listGroups` A → лише A (+ admin-гілка R3.6)
-- [ ] 4.4 V8: два конекти різних identity не бачать стан одне одного через адаптер
-- [ ] 4.5 D11: malformed recipient (не-E.164 / битий group-ID) → відмова на chokepoint, у signal-cli не потрапляє (S6)
+- [x] 4.1 Default-deny: незареєстрований метод → `-32601` без виконання
+- [x] 4.2 Inbound IDOR: A називає account B → відмова
+- [x] 4.3 Outbound IDOR: `listAccounts`/`listGroups` A → лише A (+ admin-гілка R3.6)
+- [x] 4.4 V8: два конекти різних identity не бачать стан одне одного через адаптер
+- [x] 4.5 D11: malformed recipient (не-E.164 / битий group-ID) → відмова на chokepoint, у signal-cli не потрапляє (S6)
