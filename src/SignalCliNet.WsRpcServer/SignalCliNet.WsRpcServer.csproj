@@ -14,6 +14,10 @@
       <!-- Durable-стор (G4/R3.7): embedded SQLite. Microsoft-мейнтейнений провайдер, без відомих CVE;
            10.0.x у лінії net10. Тягне SQLitePCLRaw.bundle_e_sqlite3 (нативний SQLite) — з nuget.org. -->
       <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.10" />
+      <!-- Explicit override транзитивного SQLitePCLRaw: 2.1.11 (дефолт Microsoft.Data.Sqlite 10.0.x)
+           має GHSA-2m69-gcr7-jv3q (вразливий бандл нативного SQLite) — CI audit-гейт його блокує.
+           Прибрати, коли Microsoft.Data.Sqlite сам перейде на ≥2.1.12. -->
+      <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
       <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.9" />
       <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.9" />
       <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.9" />
