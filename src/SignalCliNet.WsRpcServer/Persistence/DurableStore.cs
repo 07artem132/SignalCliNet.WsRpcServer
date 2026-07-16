@@ -258,6 +258,206 @@ public sealed class DurableStore : IDurableStore, IDisposable
     }
 
     /// <inheritdoc />
+    public void InsertToken(TokenRecord token)
+    {
+        ArgumentNullException.ThrowIfNull(token);
+
+        lock (_sync)
+        {
+            WithRetry(() =>
+            {
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    INSERT INTO auth_tokens
+                        (token_hash, pepper_version, identity_id, expires_at, is_revoked, created_at)
+                    VALUES ($hash, $ver, $identity, $expires, $revoked, $created);
+                    """;
+                BindToken(command, token);
+                command.ExecuteNonQuery();
+                return 0;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public TokenRecord? GetToken(string tokenHash)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tokenHash);
+
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    SELECT pepper_version, identity_id, expires_at, is_revoked, created_at
+                    FROM auth_tokens WHERE token_hash = $hash;
+                    """;
+                command.Parameters.AddWithValue("$hash", tokenHash);
+                using var reader = command.ExecuteReader();
+                if (!reader.Read())
+                    return null;
+
+                return new TokenRecord(
+                    tokenHash,
+                    reader.GetInt32(0),
+                    reader.GetString(1),
+                    ParseTimestamp(reader.GetString(2)),
+                    reader.GetInt32(3) != 0,
+                    ParseTimestamp(reader.GetString(4)));
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public void RotateToken(string oldTokenHash, TokenRecord newToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(oldTokenHash);
+        ArgumentNullException.ThrowIfNull(newToken);
+
+        lock (_sync)
+        {
+            WithRetry(() =>
+            {
+                using var transaction = _connection.BeginTransaction();
+
+                int revoked;
+                using (var update = _connection.CreateCommand())
+                {
+                    update.Transaction = transaction;
+                    update.CommandText = "UPDATE auth_tokens SET is_revoked = 1 WHERE token_hash = $old;";
+                    update.Parameters.AddWithValue("$old", oldTokenHash);
+                    revoked = update.ExecuteNonQuery();
+                }
+
+                // Ротація без попередника = логічна помилка: zero-overlap (W21) вимагає наявного старого
+                // токена, який ми revoke-имо у тій самій транзакції, що й вставку нового.
+                if (revoked == 0)
+                {
+                    throw new InvalidOperationException(
+                        "Ротація токена без наявного попередника — старий token_hash не знайдено у сторі.");
+                }
+
+                using (var insert = _connection.CreateCommand())
+                {
+                    insert.Transaction = transaction;
+                    insert.CommandText =
+                        """
+                        INSERT INTO auth_tokens
+                            (token_hash, pepper_version, identity_id, expires_at, is_revoked, created_at)
+                        VALUES ($hash, $ver, $identity, $expires, $revoked, $created);
+                        """;
+                    BindToken(insert, newToken);
+                    insert.ExecuteNonQuery();
+                }
+
+                transaction.Commit();
+                return 0;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public void RevokeIdentityCredentials(string identityId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(identityId);
+
+        lock (_sync)
+        {
+            WithRetry(() =>
+            {
+                using var transaction = _connection.BeginTransaction();
+
+                // Каскад revoke — усі токени identity + device-секрет — в одній транзакції (task 1.4).
+                using (var revokeTokens = _connection.CreateCommand())
+                {
+                    revokeTokens.Transaction = transaction;
+                    revokeTokens.CommandText =
+                        "UPDATE auth_tokens SET is_revoked = 1 WHERE identity_id = $identity;";
+                    revokeTokens.Parameters.AddWithValue("$identity", identityId);
+                    revokeTokens.ExecuteNonQuery();
+                }
+
+                using (var revokeSecret = _connection.CreateCommand())
+                {
+                    revokeSecret.Transaction = transaction;
+                    revokeSecret.CommandText =
+                        "UPDATE device_secrets SET is_revoked = 1 WHERE identity_id = $identity;";
+                    revokeSecret.Parameters.AddWithValue("$identity", identityId);
+                    revokeSecret.ExecuteNonQuery();
+                }
+
+                transaction.Commit();
+                return 0;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public void UpsertDeviceSecret(DeviceSecretRecord secret)
+    {
+        ArgumentNullException.ThrowIfNull(secret);
+
+        lock (_sync)
+        {
+            WithRetry(() =>
+            {
+                using var command = _connection.CreateCommand();
+                // created_at ставиться лише при першій вставці (як у identities); re-enrollment ключа
+                // оновлює public_key/algorithm/is_revoked.
+                command.CommandText =
+                    """
+                    INSERT INTO device_secrets (identity_id, public_key, algorithm, is_revoked, created_at)
+                    VALUES ($identity, $pubkey, $algo, $revoked, $created)
+                    ON CONFLICT(identity_id) DO UPDATE SET
+                        public_key = excluded.public_key,
+                        algorithm  = excluded.algorithm,
+                        is_revoked = excluded.is_revoked;
+                    """;
+                command.Parameters.AddWithValue("$identity", secret.IdentityId);
+                command.Parameters.AddWithValue("$pubkey", secret.PublicKey);
+                command.Parameters.AddWithValue("$algo", secret.Algorithm);
+                command.Parameters.AddWithValue("$revoked", secret.IsRevoked ? 1 : 0);
+                command.Parameters.AddWithValue("$created", FormatTimestamp(secret.CreatedAt));
+                command.ExecuteNonQuery();
+                return 0;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public DeviceSecretRecord? GetDeviceSecret(string identityId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(identityId);
+
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    SELECT public_key, algorithm, is_revoked, created_at
+                    FROM device_secrets WHERE identity_id = $identity;
+                    """;
+                command.Parameters.AddWithValue("$identity", identityId);
+                using var reader = command.ExecuteReader();
+                if (!reader.Read())
+                    return null;
+
+                return new DeviceSecretRecord(
+                    identityId,
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetInt32(2) != 0,
+                    ParseTimestamp(reader.GetString(3)));
+            });
+        }
+    }
+
+    /// <inheritdoc />
     public void Backup(string destinationPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
@@ -294,6 +494,17 @@ public sealed class DurableStore : IDurableStore, IDisposable
         while (reader.Read())
             accounts.Add(reader.GetString(0));
         return accounts;
+    }
+
+    // Спільне зв'язування параметрів INSERT для auth_tokens (insert + rotate-insert).
+    private static void BindToken(SqliteCommand command, TokenRecord token)
+    {
+        command.Parameters.AddWithValue("$hash", token.TokenHash);
+        command.Parameters.AddWithValue("$ver", token.PepperVersion);
+        command.Parameters.AddWithValue("$identity", token.IdentityId);
+        command.Parameters.AddWithValue("$expires", FormatTimestamp(token.ExpiresAt));
+        command.Parameters.AddWithValue("$revoked", token.IsRevoked ? 1 : 0);
+        command.Parameters.AddWithValue("$created", FormatTimestamp(token.CreatedAt));
     }
 
     private void RunIntegrityCheck()

@@ -37,6 +37,10 @@ public static class SignalRpcExtensions
         // незалежний від авто-дискавері. Singleton — таблиця незмінна на весь час життя процесу.
         services.AddSingleton<IRpcPolicyRegistry, SignalRpcPolicyRegistry>();
 
+        // Authn-core (token store + lifecycle): пеппер-провайдер, токен-сервіс, TimeProvider.
+        // Спирається на durable-стор і Persistence-опції з AddSecureDeployment (реєструється у Program.cs).
+        services.AddAuthnCore();
+
         // RPC adapters
         services.AddScoped<ISignalAccountsRpc, SignalAccountsRpcAdapter>();
         services.AddScoped<ISignalDevicesRpc, SignalDevicesRpcAdapter>();

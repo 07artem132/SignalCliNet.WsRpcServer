@@ -42,6 +42,28 @@ internal static class SchemaMigrator
 
             CREATE INDEX ix_account_bindings_identity ON account_bindings(owning_identity_id);
             """),
+
+        (2,
+            """
+            CREATE TABLE auth_tokens (
+                token_hash     TEXT PRIMARY KEY,
+                pepper_version INTEGER NOT NULL,
+                identity_id    TEXT NOT NULL REFERENCES identities(id) ON DELETE CASCADE,
+                expires_at     TEXT NOT NULL,
+                is_revoked     INTEGER NOT NULL DEFAULT 0,
+                created_at     TEXT NOT NULL
+            ) STRICT;
+
+            CREATE INDEX ix_auth_tokens_identity ON auth_tokens(identity_id);
+
+            CREATE TABLE device_secrets (
+                identity_id TEXT PRIMARY KEY REFERENCES identities(id) ON DELETE CASCADE,
+                public_key  TEXT NOT NULL,
+                algorithm   TEXT NOT NULL,
+                is_revoked  INTEGER NOT NULL DEFAULT 0,
+                created_at  TEXT NOT NULL
+            ) STRICT;
+            """),
     ];
 
     /// <summary>Migrates <paramref name="connection"/> up to <see cref="LatestVersion"/>.</summary>

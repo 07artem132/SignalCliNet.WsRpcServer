@@ -23,6 +23,9 @@
       <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.9" />
       <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.9" />
       <PackageReference Include="NetCoreServer" Version="8.0.7" />
+      <!-- CRC32 для checksum-сегмента opaque-токена (fast-reject малформлених токенів БЕЗ
+           звернення до стору й HMAC). Microsoft-мейнтейнений, 10.0.x у лінії net10; з nuget.org. -->
+      <PackageReference Include="System.IO.Hashing" Version="10.0.10" />
       <PackageReference Include="SignalCli.NET" Version="4.10.1" />
       <PackageReference Include="SignalCli.Runtime" Version="0.14.3.1" />
       <PackageReference Include="StreamJsonRpc" Version="2.25.29" />
