@@ -20,3 +20,10 @@ internal sealed partial class TransportSecurityOptionsValidator : IValidateOptio
 // валідується .Validate(...) у AddAuthnCore.
 [OptionsValidator]
 internal sealed partial class AuthOptionsValidator : IValidateOptions<AuthOptions>;
+
+/// <summary>Compile-time validator for <see cref="AdmissionOptions"/> (DataAnnotations [Range] bounds).</summary>
+// Межові правила (AggregateBudgetPerWindow 1..100000, BudgetWindowMinutes 1..1440, PerUserFloorPerWindow
+// 0..10000, NewRecipientsPerWindow 1..1000, ReserveBlockSize 1..1000) — через [Range]. Крос-правило
+// PerUserFloorPerWindow ≤ AggregateBudgetPerWindow — .Validate(...) у AddAdmissionCore.
+[OptionsValidator]
+internal sealed partial class AdmissionOptionsValidator : IValidateOptions<AdmissionOptions>;

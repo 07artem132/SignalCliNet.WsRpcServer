@@ -1,15 +1,16 @@
 # Tasks: add-admission-rate-limits
 
 ## 1. Admission-функція (W16)
-- [ ] 1.1 Один упорядкований `admit(principal, account, recipient)` на chokepoint; калібровка Σ(per_user_floor) ≤ aggregate
-- [ ] 1.2 Per-user floor / fair-share під агрегатом (G2 — без FIFO-starvation)
-- [ ] 1.3 New-recipient window counter (D2), throttle нових контактів окремо від обсягу
-- [ ] 1.4 Global-pause gate (Phase-3 реакція на -5/-6) — заглушка з інтерфейсом
+- [x] 1.1 Один упорядкований `admit(principal, account, recipient)` на chokepoint; калібровка Σ(per_user_floor) ≤ aggregate
+      (admission-ядро: `AdmissionControl.Admit` + крос-валідатор floor ≤ aggregate; виклик із chokepoint — наступна секція)
+- [x] 1.2 Per-user floor / fair-share під агрегатом (G2 — без FIFO-starvation)
+- [x] 1.3 New-recipient window counter (D2), throttle нових контактів окремо від обсягу
+- [x] 1.4 Global-pause gate (Phase-3 реакція на -5/-6) — заглушка з інтерфейсом
 
 ## 2. Бот-бюджет reserve-then-send (W13)
-- [ ] 2.1 In-memory атомарний RMW (lock / `UPDATE…WHERE n>0` + rows-affected; G3)
-- [ ] 2.2 Durable блок-резервація K одиниць; cold-start: залишок форфейтиться (ніколи не re-spend)
-- [ ] 2.3 Монотонний годинник для refill (D15)
+- [x] 2.1 In-memory атомарний RMW (lock / `UPDATE…WHERE n>0` + rows-affected; G3)
+- [x] 2.2 Durable блок-резервація K одиниць; cold-start: залишок форфейтиться (ніколи не re-spend)
+- [x] 2.3 Монотонний годинник для refill (D15)
 
 ## 3. Транспортні ліміти
 - [ ] 3.1 `MaxMessageSizeBytes` → 64KB у конфігу (V3)
