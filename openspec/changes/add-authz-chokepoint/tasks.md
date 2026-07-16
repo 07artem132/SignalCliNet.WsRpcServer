@@ -7,10 +7,10 @@
 - [x] 1.4 Упорядкувати teardown сесії перед auth-стан-машиною: без `async void`/fire-and-forget на критичному шляху (A4)
 
 ## 2. IDOR-guards
-- [ ] 2.1 `AssertAccountAllowed(principal, targetAccount)` на кожному account-bearing методі (W8)
-- [ ] 2.2 Outbound `FilterReadOutputAsync` — fail-closed (виняток → empty, ніколи raw; W22) + fault-injection тест
-- [ ] 2.3 R3.2: `listGroups` → лише claim'нуті/власні групи; R3.5: own-linked приватні; R3.6: admin — role-conditional гілка
-- [ ] 2.4 Валідація+нормалізація recipient (E.164/group-ID), розмір/кодування тексту до dispatch (D11)
+- [x] 2.1 `AssertAccountAllowed(principal, targetAccount)` на кожному account-bearing методі (W8)
+- [x] 2.2 Outbound `FilterReadOutputAsync` — fail-closed (виняток → empty, ніколи raw; W22) + fault-injection тест
+- [x] 2.3 R3.2: `listGroups` → лише claim'нуті/власні групи; R3.5: own-linked приватні; R3.6: admin — role-conditional гілка
+- [x] 2.4 Валідація+нормалізація recipient (E.164/group-ID), розмір/кодування тексту до dispatch (D11)
 
 ## 3. Контракт
 - [ ] 3.1 Санітизація всіх клієнтських помилок (generic; деталі лише в лог)

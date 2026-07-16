@@ -38,12 +38,14 @@ public sealed class SignalRpcPolicyRegistry : IRpcPolicyRegistry
         // --- AccountCommand: команда, що змінює/діє від імені акаунта; inbound-guard по account ---
         // syncAccount не адресує конкретний акаунт аргументом — привілейована, але без per-account guard.
         new() { Method = "syncAccount", Kind = RpcPolicyKind.AccountCommand },
-        // sendTextMessage(account, recipients, message) — guard account + валідація recipient (D11).
+        // sendTextMessage(account, recipients, message) — guard account + валідація recipient +
+        // розмір/кодування тексту (D11), усе до dispatch.
         new()
         {
             Method = "sendTextMessage", Kind = RpcPolicyKind.AccountCommand,
             AccountArgName = "account", AccountArgIndex = 0,
             RecipientsArgName = "recipients", RecipientsArgIndex = 1,
+            TextArgName = "message", TextArgIndex = 2,
         },
         // subscribe(account, eventTypes) — guard account (підписка на події конкретного акаунта).
         new()

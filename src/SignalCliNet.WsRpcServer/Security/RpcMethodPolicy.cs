@@ -31,6 +31,12 @@ public sealed record RpcMethodPolicy
     /// <summary>Zero-based position of the <c>recipients</c> argument (for positional calls).</summary>
     public int RecipientsArgIndex { get; init; } = -1;
 
+    /// <summary>Name of the message-body/text argument to size-check (D11), or <c>null</c> if the method carries none.</summary>
+    public string? TextArgName { get; init; }
+
+    /// <summary>Zero-based position of the message-body/text argument (for positional calls).</summary>
+    public int TextArgIndex { get; init; } = -1;
+
     /// <summary>Which fail-closed outbound filter to apply to the result (read output visibility).</summary>
     public ReadOutputKind Output { get; init; } = ReadOutputKind.None;
 }

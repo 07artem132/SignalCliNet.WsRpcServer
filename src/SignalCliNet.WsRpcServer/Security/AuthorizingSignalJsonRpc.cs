@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using StreamJsonRpc;
 using StreamJsonRpc.Protocol;
+using WsRpcServer.Exceptions;
 
 namespace SignalCliNet.WsRpcServer.Security;
 
@@ -22,6 +23,9 @@ namespace SignalCliNet.WsRpcServer.Security;
 /// </remarks>
 public sealed class AuthorizingSignalJsonRpc : JsonRpc
 {
+    /// <summary>Generous upper bound on a message body (chars) checked before dispatch (D11).</summary>
+    private const int MaxMessageTextChars = 64_000;
+
     private readonly SignalPrincipal _principal;
     private readonly IRpcPolicyRegistry _policies;
     private readonly ILogger? _logger;
@@ -62,24 +66,97 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
         {
             // privacy: логуємо лише ім'я методу (не PII); клієнту — generic -32601.
             _logger?.LogWarning("Chokepoint: RPC-метод {Method} не має явної політики — відмова (-32601)", method);
-            return MethodNotFound(request);
+            return Error(request, JsonRpcErrorCode.MethodNotFound, "Method not found.");
         }
 
-        // 2. Диспетч цільового методу; principal публікуємо в call-context на час виклику (V8).
+        // 2. Inbound guards (pre-dispatch): anti-IDOR по account + валідація recipient/тексту (D11).
+        //    Відмови кидають RpcErrorException; конвертуємо у детермінований JsonRpcError.
+        try
+        {
+            RunInboundGuards(policy, request);
+        }
+        catch (RpcErrorException ex)
+        {
+            return Error(request, ex.ErrorCode, ex.Message);
+        }
+
+        // 3. Диспетч цільового методу; principal публікуємо в call-context на час виклику (V8).
+        JsonRpcMessage response;
         using (SignalCallContext.Enter(_principal))
         {
-            return await base.DispatchRequestAsync(request, targetMethod, cancellationToken).ConfigureAwait(false);
+            response = await base.DispatchRequestAsync(request, targetMethod, cancellationToken).ConfigureAwait(false);
+        }
+
+        // 4. Outbound-фільтр (AccountQuery) — fail-closed, лише для успішного результату.
+        if (policy.Output != ReadOutputKind.None && response is JsonRpcResult result)
+        {
+            result.Result = ReadOutputFilter.Filter(policy.Output, _principal, result.Result, _logger);
+        }
+
+        return response;
+    }
+
+    // Проганяє inbound-перевірки, які МУСЯТЬ відпрацювати до dispatch: жоден малформований чи
+    // неавторизований виклик не доходить до signal-cli.
+    private void RunInboundGuards(RpcMethodPolicy policy, JsonRpcRequest request)
+    {
+        // Anti-IDOR: якщо метод несе account — звіряємо його з principal (W8).
+        if (policy.AccountArgName is not null)
+        {
+            var account = ExtractString(request, policy.AccountArgName, policy.AccountArgIndex);
+            if (string.IsNullOrWhiteSpace(account))
+                throw new RpcErrorException(JsonRpcErrorCode.InvalidParams, "Account cannot be empty.");
+
+            AccountIsolationGuard.AssertAccountAllowed(_principal, account);
+        }
+
+        // D11: валідація recipient'ів до dispatch.
+        if (policy.RecipientsArgName is not null)
+        {
+            var recipients = ExtractStringList(request, policy.RecipientsArgName, policy.RecipientsArgIndex);
+            RecipientValidator.AssertValidUserRecipients(recipients);
+        }
+
+        // D11: розмір/кодування тексту повідомлення до dispatch.
+        if (policy.TextArgName is not null)
+        {
+            var text = ExtractString(request, policy.TextArgName, policy.TextArgIndex);
+            if (text is not null && (text.Length > MaxMessageTextChars || text.Contains('\0')))
+                throw new RpcErrorException(JsonRpcErrorCode.InvalidParams, "Message text is invalid or too large.");
         }
     }
 
-    // Generic -32601 без відображення вводу клієнта — узгоджено з політикою санітизації помилок.
-    private static JsonRpcError MethodNotFound(JsonRpcRequest request) => new()
+    // Дістає рядковий аргумент за іменем АБО позицією (named/positional запити) — через
+    // TryGetArgumentByNameOrIndex, який робить типізовану десеріалізацію з форматтера.
+    private static string? ExtractString(JsonRpcRequest request, string name, int index) =>
+        request.TryGetArgumentByNameOrIndex(name, index, typeof(string), out var value) && value is string s
+            ? s
+            : null;
+
+    // Дістає масив рядків (recipients). Порожній список, якщо аргумент відсутній/непарситься —
+    // порожнечу/малформ обробляють валідатор і адаптер нижче.
+    private static IReadOnlyList<string> ExtractStringList(JsonRpcRequest request, string name, int index)
+    {
+        if (!request.TryGetArgumentByNameOrIndex(name, index, typeof(List<string>), out var value) || value is null)
+            return [];
+
+        return value switch
+        {
+            IReadOnlyList<string> list => list,
+            IEnumerable<string> seq => seq.ToList(),
+            IEnumerable<object?> objs => objs.Select(static o => o?.ToString() ?? string.Empty).ToList(),
+            _ => [],
+        };
+    }
+
+    // Детермінований JSON-RPC error із заданими кодом/повідомленням (повне керування, без CommonErrorData).
+    private static JsonRpcError Error(JsonRpcRequest request, JsonRpcErrorCode code, string message) => new()
     {
         RequestId = request.RequestId,
         Error = new JsonRpcError.ErrorDetail
         {
-            Code = JsonRpcErrorCode.MethodNotFound,
-            Message = "Method not found.",
+            Code = code,
+            Message = message,
         },
     };
 }
