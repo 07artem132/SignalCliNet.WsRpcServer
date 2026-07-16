@@ -27,11 +27,22 @@ dotnet run --project src/SignalCliNet.WsRpcServer
 
 ### Перший флоу (link → send)
 
-1. `startLink` → повертає `deviceLinkUri` (QR). Відскануй у Signal → Linked devices.
-2. `finishLink(deviceLinkUri, deviceName)` → завершує прив'язку.
+1. `startLink(targetAccount?)` → повертає `{ sessionId, deviceLinkUri }`. `deviceLinkUri` — QR:
+   відскануй у Signal → Linked devices. `sessionId` — одноразовий 256-бітний ідентифікатор link-сесії
+   (TTL **120с**, rate-limit **3/хв на identity**). `targetAccount` — опційна підказка: якщо це вже
+   прив'язаний (спільний) акаунт, старт лінкування дозволений лише admin/full-access principal (захист
+   від takeover; не-admin → `-32001`).
+2. `finishLink(sessionId, deviceName)` → завершує прив'язку. **Передається `sessionId`, а НЕ сирий
+   `deviceLinkUri`** (breaking-зміна щодо Фази-1: старий клієнт із `finishLink(deviceLinkUri, …)` не
+   сумісний). Сесію гасить лише та сама identity, що її створила (анти-griefing); успіх приватно
+   прив'язує щойно-злінкований номер до caller (R3.5). Невідома / чужа / прострочена сесія → однакова
+   помилка `-32004` (anti-oracle: клієнт не дізнається, який саме випадок).
 3. `sendTextMessage(account, recipients, message)` → шле текст.
 4. `listAccounts` / `listGroups(account)` → перегляд.
 5. `ping` → `"pong"` (health, без стану — для контейнер-healthcheck).
+
+> **Device-link URI/QR — чутливе.** Сервер НІКОЛИ не логує `deviceLinkUri`; клієнт після `startLink`
+> оперує лише `sessionId`. Сирий URI живе тільки у in-memory сесії й іде в signal-cli напряму.
 
 ## Конфігурація (`appsettings.json`)
 
@@ -98,6 +109,15 @@ in-flight cap, server-wide гейт до signal-cli) — **опт-ін**, як �
 - **WS close `1000` `idle-timeout`** — не rate-подія: сесія мовчала довше за `IdleTimeoutMinutes`.
   Клієнт може перепідключитись одразу (без backoff).
 
+Коди відмов лінкування пристрою (`startLink`/`finishLink`):
+
+- **`-32004`** — `finishLink` на невалідну link-сесію (невідома / чужа / прострочена). Однакова
+  помилка на всі три випадки (anti-oracle). `error.message` = `"Link session is invalid or has expired."`.
+- **`-32001`** — `startLink(targetAccount)`, де `targetAccount` — уже прив'язаний (спільний) акаунт, а
+  principal не admin/full-access. `error.message` = `"Access denied."`.
+- **`-32005`** — перевищено rate-limit стартів лінкування (**3/хв на identity**); `error.data` несе
+  `retry_after` (секунди), як і решта `-32005`.
+
 **Рекомендація клієнтам (jittered backoff, G13).** На `-32005`/`4429` не ретрайте одразу й не в унісон.
 Стартуйте з `retry_after` (якщо є) або base = **1с**, множник **2** на кожну наступну відмову, з
 джитером **±50%**, cap **60с**. Приклад: `delay = min(60, base * 2^n) * (0.5 + random()*1.0)`.
@@ -135,6 +155,12 @@ signal-cli стартує у **`--receive-mode=manual`** (send-only) з коро
 default = `true`, і сервер його не чіпає. Тобто демон **не** receive-ить вхідні за всі акаунти.
 Це навмисно для send-only MVP. Наслідок: щойно-злінкований власний номер може мати порожній/stale
 `listGroups`, доки не пройде sync через receive (актуально для Фази 2 own-number flow).
+
+> **G7 (link-sessions, task 5).** Після `finishLink` нового номера `listGroups(account)` може бути
+> **порожнім/stale до першого receive** — link-sessions свідомо НЕ робить one-shot receive/sync.
+> Авто-receive (claim-router, який receive-ить за власними акаунтами) приходить окремою зміною
+> `add-group-claim-receive`; до її мержу групи підтягуються лише коли демон отримає вхідні (напр. після
+> ручного receive або першого повідомлення). Це очікувана поведінка, а не баг.
 
 ## Контейнер
 
