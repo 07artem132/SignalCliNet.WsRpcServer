@@ -6,6 +6,7 @@ using System.Threading.Channels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NetCoreServer;
+using SignalCliNet.WsRpcServer.Security;
 using SignalCliNet.WsRpcServer.Serialization;
 using StreamJsonRpc;
 using WsRpcServer.Core;
@@ -24,11 +25,22 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
 {
     private readonly IRpcServiceRegistry _serviceRegistry;
     private readonly IEventProcessor _eventProcessor;
+    private readonly IRpcPolicyRegistry _policyRegistry;
     private readonly Channel<RpcNotification> _notificationChannel;
     private readonly CancellationTokenSource _cts = new();
     private readonly WebSocketMessageHandler _messageHandler;
     private readonly JsonRpcServerConfig _config;
+
+    // Фаза 1: справжньої автентифікації ще немає (authn — окрема пізніша зміна). Bind лишається
+    // loopback-only, тож сесія отримує повний доступ (LoopbackFullAccess) як компенсацію за
+    // відсутність auth. Коли з'явиться authn, principal виводитиметься з ідентичності конекту.
+    private readonly SignalPrincipal _principal = SignalPrincipal.LoopbackFullAccess;
+
     private Task? _processingTask;
+
+    // A4: teardown має відпрацювати рівно один раз і детерміновано (без гонки OnWsClose ↔ OnWsDisconnected),
+    // щоб майбутня auth-стан-машина мала чистий, упорядкований хук замість fire-and-forget.
+    private int _teardownStarted;
 
     public SignalRpcSession(
         WsServer server,
@@ -36,12 +48,14 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
         ILogger<SignalRpcSession> logger,
         IRpcServiceRegistry serviceRegistry,
         IEventProcessor eventProcessor,
+        IRpcPolicyRegistry policyRegistry,
         JsonRpcServerConfig config)
         : base(server, logger, config)
     {
         _eventProcessor = eventProcessor ?? throw new ArgumentNullException(nameof(eventProcessor));
         _config = config ?? throw new ArgumentNullException(nameof(config));
         _serviceRegistry = serviceRegistry ?? throw new ArgumentNullException(nameof(serviceRegistry));
+        _policyRegistry = policyRegistry ?? throw new ArgumentNullException(nameof(policyRegistry));
 
         // Create message handler that will pass data to StreamJsonRpc
         _messageHandler = ActivatorUtilities.CreateInstance<WebSocketMessageHandler>(
@@ -93,8 +107,10 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
 
         try
         {
-            // Create and configure JsonRpc instance
-            JsonRpc = new JsonRpc(_messageHandler);
+            // V9: pre-dispatch chokepoint замість голого JsonRpc — кожен виклик проходить герметичний
+            // default-deny + IDOR-guard + санітизацію помилок. Principal сесії передаємо сюди (Фаза 1
+            // — loopback full-access), він читається per-invocation під час диспетчу (V8).
+            JsonRpc = new AuthorizingSignalJsonRpc(_messageHandler, _principal, _policyRegistry, Logger);
 
             // Configure JSON-RPC
             JsonRpc.CancelLocallyInvokedMethodsWhenConnectionIsClosed = true;
@@ -138,14 +154,21 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
     }
 
     /// <summary>
-    /// Called by NetCoreServer when WebSocket disconnects
+    /// Called by NetCoreServer when the WebSocket disconnects. This is the authoritative, fully-awaited
+    /// teardown path.
     /// </summary>
+    /// <remarks>
+    /// A4: сигнатура <c>async void</c> нав'язана NetCoreServer (перекриваємо void-callback), АЛЕ тіло
+    /// повністю чекає на впорядкований <see cref="TeardownAsync"/> — це не fire-and-forget: жоден крок
+    /// teardown'у не «зривається» у фон. Ідемпотентність гарантує, що навіть якщо цей callback
+    /// перетнеться з <see cref="OnWsClose"/>/<see cref="Dispose"/>, послідовність відпрацює рівно раз.
+    /// </remarks>
     public override async void OnWsDisconnected()
     {
         try
         {
             Logger.LogInformation("WebSocket client disconnected: {ClientId}", Id);
-            await DisconnectAsync().ConfigureAwait(false);
+            await TeardownAsync().ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -154,10 +177,20 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
     }
 
     /// <summary>
-    /// Asynchronously cleans up resources on disconnect
+    /// Ordered, run-once session teardown: cancel → unregister → complete channel → dispose JsonRpc →
+    /// drain the notification loop. Idempotent (A4).
     /// </summary>
-    private async Task DisconnectAsync()
+    /// <remarks>
+    /// Кроки виконуються в детермінованому порядку в одному потоці керування — без offload'у диспоузу
+    /// у thread-pool (прибрано попередній <c>Task.Run(() =&gt; JsonRpc.Dispose())</c>), щоб порядок
+    /// звільнення був передбачуваним для майбутньої auth-стан-машини.
+    /// </remarks>
+    private async Task TeardownAsync()
     {
+        // Ідемпотентність: рівно один виклик проходить далі (гонка OnWsClose ↔ OnWsDisconnected ↔ Dispose).
+        if (Interlocked.Exchange(ref _teardownStarted, 1) != 0)
+            return;
+
         if (IsDisposed)
             return;
 
@@ -165,29 +198,29 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
 
         try
         {
-            // Cancel all operations
+            // 1. Сигналізуємо скасування всіх фонових операцій.
             _cts.Cancel();
 
-            // Unregister client from event system
+            // 2. Знімаємо клієнта з системи подій (більше жодних нотифікацій йому не адресується).
             _eventProcessor.UnregisterClient(Id);
             Logger.LogDebug("Client {ClientId} unregistered from event system", Id);
 
-            // Complete notification channel
+            // 3. Завершуємо канал сповіщень (цикл обробки вийде природно).
             _notificationChannel.Writer.TryComplete();
             Logger.LogDebug("Notification channel completed for client {ClientId}", Id);
 
-            // Dispose JsonRpc (which will also dispose the message handler)
+            // 4. Диспоузимо JsonRpc (разом із message handler) — інлайн, у визначеному порядку.
             if (JsonRpc != null)
             {
-                await Task.Run(() => JsonRpc.Dispose());
+                JsonRpc.Dispose();
                 JsonRpc = null;
                 Logger.LogDebug("JsonRpc disposed for client {ClientId}", Id);
             }
 
-            // Wait for notification processing to complete with timeout
+            // 5. Дренуємо фонову задачу обробки сповіщень із таймаутом.
             if (_processingTask != null)
             {
-                await Task.WhenAny(_processingTask, Task.Delay(1000));
+                await Task.WhenAny(_processingTask, Task.Delay(1000)).ConfigureAwait(false);
                 _processingTask = null;
                 Logger.LogDebug("Notification processing completed for client {ClientId}", Id);
             }
@@ -244,11 +277,9 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
     {
         Logger.LogInformation("Received WebSocket close frame with status {Status} for client {ClientId}", status, Id);
 
-        // Allow NetCoreServer to handle the close handshake
+        // Дозволяємо NetCoreServer завершити close-handshake; це призводить до OnWsDisconnected, де
+        // й відпрацьовує єдиний упорядкований teardown (A4: без окремого fire-and-forget тут).
         base.OnWsClose(buffer, offset, size, status);
-
-        // Ensure cleanup is performed
-        _ = DisconnectAsync();
     }
 
     protected override void Dispose(bool disposing)
