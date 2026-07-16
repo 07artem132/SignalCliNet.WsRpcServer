@@ -76,6 +76,9 @@ internal static class CertificateFactory
         request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(
             [new Oid(enhancedKeyUsageOid)], critical: false));
         request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, critical: false));
+        // Strict-клієнти (python 3.13+, VERIFY_X509_STRICT) вимагають Authority Key Identifier за RFC 5280.
+        request.CertificateExtensions.Add(X509AuthorityKeyIdentifierExtension.CreateFromCertificate(
+            ca, includeKeyIdentifier: true, includeIssuerAndSerial: false));
         if (san is not null)
             request.CertificateExtensions.Add(san.Build());
 

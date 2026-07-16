@@ -21,6 +21,7 @@ public sealed class SecretMaterialProvisioner(ILogger<SecretMaterialProvisioner>
     private const int LeafValidityDays = 397;   // 13 місяців — типовий стель для leaf-cert
     private const int RenewalWindowDays = 30;   // переоформлюємо, якщо лишилось менше цього до простроки
     private const int PepperBytes = 32;         // 256-bit CSPRNG
+    private const string AuthorityKeyIdentifierOid = "2.5.29.35";
 
     private readonly ILogger<SecretMaterialProvisioner> _logger =
         logger ?? throw new ArgumentNullException(nameof(logger));
@@ -130,6 +131,12 @@ public sealed class SecretMaterialProvisioner(ILogger<SecretMaterialProvisioner>
             {
                 _logger.LogInformation(
                     "Cert '{Name}' не будує ланцюг до поточного CA — переоформлення новим CA.", name);
+            }
+            else if (!existing.Extensions.Cast<X509Extension>().Any(e => e.Oid?.Value == AuthorityKeyIdentifierOid))
+            {
+                _logger.LogInformation(
+                    "Cert '{Name}' без Authority Key Identifier (старий формат) — переоформлення для сумісності зі strict-клієнтами (python 3.13+).",
+                    name);
             }
             else if (notAfter > now.UtcDateTime.AddDays(RenewalWindowDays))
             {

@@ -110,6 +110,56 @@ public class SecretMaterialProvisionerTests : IDisposable
     }
 
     [Fact]
+    public void Provision_LeafCerts_CarryAuthorityKeyIdentifier()
+    {
+        // Regression: strict-клієнти (python 3.13+, VERIFY_X509_STRICT) відхиляють ланцюг без AKI
+        // на leaf-ах (RFC 5280) — "Missing Authority Key Identifier".
+        var secrets = NewProvisioner().Provision(_dataDir, hostname: null);
+
+        using var server = X509Certificate2.CreateFromPem(File.ReadAllText(secrets.ServerCertificatePath));
+        using var admin = X509Certificate2.CreateFromPem(File.ReadAllText(secrets.AdminClientCertificatePath));
+
+        Assert.Contains(server.Extensions.Cast<X509Extension>(), e => e.Oid?.Value == "2.5.29.35");
+        Assert.Contains(admin.Extensions.Cast<X509Extension>(), e => e.Oid?.Value == "2.5.29.35");
+    }
+
+    [Fact]
+    public void Provision_LegacyLeafWithoutAki_IsReissued_CaUnchanged()
+    {
+        // Self-heal старих томів: leaf старого формату (без AKI, ще довго валідний, ланцюг цілий)
+        // мусить переоформитись на старті; CA лишається той самий (client-trust не ламається).
+        var first = NewProvisioner().Provision(_dataDir, hostname: null);
+        var caBefore = File.ReadAllText(first.CaCertificatePath);
+
+        using (var ca = X509Certificate2.CreateFromPemFile(first.CaCertificatePath, first.CaKeyPath))
+        using (var key = System.Security.Cryptography.ECDsa.Create(
+                   System.Security.Cryptography.ECCurve.NamedCurves.nistP256))
+        {
+            // Мінімальний legacy-leaf: підписаний тим самим CA, БЕЗ AKI, поза renewal-вікном.
+            var request = new CertificateRequest(
+                "CN=localhost", key, System.Security.Cryptography.HashAlgorithmName.SHA256);
+            request.CertificateExtensions.Add(new X509BasicConstraintsExtension(
+                certificateAuthority: false, hasPathLengthConstraint: false, pathLengthConstraint: 0, critical: true));
+            request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, critical: false));
+
+            var serial = System.Security.Cryptography.RandomNumberGenerator.GetBytes(16);
+            serial[0] = 0x01;
+            using var legacy = request.Create(
+                ca, DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(200), serial);
+
+            File.WriteAllText(first.ServerCertificatePath, legacy.ExportCertificatePem());
+            File.WriteAllText(first.ServerKeyPath, key.ExportPkcs8PrivateKeyPem());
+        }
+
+        // «Рестарт»: гілка «без AKI» має спрацювати попри валідний термін і цілий ланцюг.
+        var second = NewProvisioner().Provision(_dataDir, hostname: null);
+
+        using var reissued = X509Certificate2.CreateFromPem(File.ReadAllText(second.ServerCertificatePath));
+        Assert.Contains(reissued.Extensions.Cast<X509Extension>(), e => e.Oid?.Value == "2.5.29.35");
+        Assert.Equal(caBefore, File.ReadAllText(second.CaCertificatePath));
+    }
+
+    [Fact]
     public void Provision_KeyFiles_AreOwnerOnly_OnUnix()
     {
         if (OperatingSystem.IsWindows())
