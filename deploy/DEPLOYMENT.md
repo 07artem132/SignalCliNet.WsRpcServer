@@ -179,3 +179,37 @@ JSON-RPC 2.0. Основні методи (усі — camelCase):
 - **Health-check:** сервер сам перезапускає signal-cli при збоях
   (`SignalCli:MaxRestartAttempts`, `HealthCheckIntervalSeconds`).
 - **Логи:** `docker compose logs -f`. Рівень — `Logging:LogLevel:Default`.
+
+---
+
+## 7. Реліз-бінарники
+
+Крім Docker, кожен GitHub Release (тег `vX.Y.Z`) публікує два **self-contained**
+архіви — окремий `.NET`-рантайм не потрібен, лише розпакувати й запустити:
+
+| Asset | Платформа |
+|---|---|
+| `SignalCliNet.WsRpcServer-<версія>-linux-x64.tar.gz` | Linux x64 |
+| `SignalCliNet.WsRpcServer-<версія>-win-x64.zip` | Windows x64 |
+
+```bash
+# Linux, приклад
+tar -xzf SignalCliNet.WsRpcServer-1.1.0-linux-x64.tar.gz -C /opt/wsrpc
+cd /opt/wsrpc
+SignalCli__JavaExecutable=/opt/jdk25/bin/java ./SignalCliNet.WsRpcServer
+```
+
+Payload signal-cli (з `SignalCli.Runtime`) вже всередині архіву — MSBuild-таргет
+`CopySignalCliToPublish` доносить його у publish-папку. Але **JDK 25 у бінарник
+не входить**: signal-cli — Java-застосунок, тому на цільовій машині все одно
+потрібен встановлений JDK 25 (шлях — через `SignalCli:JavaExecutable`, як і в
+розділі 1).
+
+Ручний запуск пайплайна (`Actions → Release → Run workflow`, без тегу) не
+створює GitHub Release — лише завантажує ті самі два архіви як
+workflow-артефакти (версія `0.0.0-manual`), зручно для перевірки збірки без
+публікації.
+
+CI-пайплайн: [`.github/workflows/release.yml`](../.github/workflows/release.yml)
+(build → тести → publish `-r linux-x64`/`-r win-x64` → архів → реліз). Restore
+залежностей — та сама FAST/FALLBACK-логіка, що й у `build.yml` (§2).
