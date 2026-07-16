@@ -19,32 +19,7 @@ public static class Program
             {
                 var signalSection = hostContext.Configuration.GetSection("SignalCli");
 
-                services.AddSignalCli(options =>
-                {
-                    options.LibDirectory = signalSection["LibDirectory"] ?? "signal-cli/lib";
-
-                    var appHome = signalSection["AppHome"];
-                    options.AppHome = !string.IsNullOrWhiteSpace(appHome)
-                        ? appHome
-                        : AppContext.BaseDirectory;
-
-                    var storagePath = signalSection["StoragePathCli"];
-                    if (!string.IsNullOrWhiteSpace(storagePath))
-                        options.StoragePathCli = storagePath;
-
-                    var javaExecutable = signalSection["JavaExecutable"];
-                    if (!string.IsNullOrWhiteSpace(javaExecutable))
-                        options.JavaExecutable = javaExecutable;
-
-                    if (int.TryParse(signalSection["MaxRestartAttempts"], out var maxRestart))
-                        options.MaxRestartAttempts = maxRestart;
-
-                    if (int.TryParse(signalSection["HealthCheckIntervalSeconds"], out var healthInterval))
-                        options.HealthCheckIntervalSeconds = healthInterval;
-
-                    if (int.TryParse(signalSection["HealthCheckTimeoutSeconds"], out var healthTimeout))
-                        options.HealthCheckTimeoutSeconds = healthTimeout;
-                });
+                services.AddSignalCli(options => ApplySignalCliConfig(signalSection, options));
 
                 services.AddSignalEvents();
 
@@ -69,5 +44,42 @@ public static class Program
             .Build();
 
         await host.RunAsync();
+    }
+
+    /// <summary>
+    /// Maps the "SignalCli" configuration section onto <see cref="SignalCli.Models.SignalCliOptions"/>.
+    /// Extracted from the host-builder lambda so the key passthrough is unit-testable.
+    /// </summary>
+    public static void ApplySignalCliConfig(
+        IConfigurationSection signalSection, SignalCli.Models.SignalCliOptions options)
+    {
+        options.LibDirectory = signalSection["LibDirectory"] ?? "signal-cli/lib";
+
+        var appHome = signalSection["AppHome"];
+        options.AppHome = !string.IsNullOrWhiteSpace(appHome)
+            ? appHome
+            : AppContext.BaseDirectory;
+
+        var storagePath = signalSection["StoragePathCli"];
+        if (!string.IsNullOrWhiteSpace(storagePath))
+            options.StoragePathCli = storagePath;
+
+        var javaExecutable = signalSection["JavaExecutable"];
+        if (!string.IsNullOrWhiteSpace(javaExecutable))
+            options.JavaExecutable = javaExecutable;
+
+        if (int.TryParse(signalSection["MaxRestartAttempts"], out var maxRestart))
+            options.MaxRestartAttempts = maxRestart;
+
+        if (int.TryParse(signalSection["HealthCheckIntervalSeconds"], out var healthInterval))
+            options.HealthCheckIntervalSeconds = healthInterval;
+
+        if (int.TryParse(signalSection["HealthCheckTimeoutSeconds"], out var healthTimeout))
+            options.HealthCheckTimeoutSeconds = healthTimeout;
+
+        // finishLink чекає на скан QR користувачем — дефолтних 30с замало
+        // (D16+W9: TTL link-сесії 120с; per-call timeout — питання до upstream).
+        if (int.TryParse(signalSection["RequestTimeoutSeconds"], out var requestTimeout))
+            options.RequestTimeoutSeconds = requestTimeout;
     }
 }
