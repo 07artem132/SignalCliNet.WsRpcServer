@@ -59,15 +59,16 @@ public sealed class SecretMaterialProvisioner(ILogger<SecretMaterialProvisioner>
         // 1. CA — persist-once, НІКОЛИ не перегенеровувати (fresh CA = зламаний client-trust).
         using var ca = EnsureCertificateAuthority(caCertPath, caKeyPath, now);
 
-        // 2. Server (serverAuth) leaf — генеруємо або переоформлюємо при простроченні (2.3).
+        // 2. Server (serverAuth) leaf — генеруємо, переоформлюємо при простроченні (2.3) або якщо
+        //    він не будує ланцюг до поточного CA (частковий restore/tamper).
         EnsureLeafCertificate(
-            serverCertPath, serverKeyPath, "server",
+            serverCertPath, serverKeyPath, "server", ca,
             () => CertificateFactory.IssueServerCertificate(ca, hostname, now.AddMinutes(-5), now.AddDays(LeafValidityDays)),
             now);
 
         // 3. Admin (clientAuth) mTLS-бандл — те саме, підписаний тим самим CA (S3-канон).
         EnsureLeafCertificate(
-            adminCertPath, adminKeyPath, "admin-client",
+            adminCertPath, adminKeyPath, "admin-client", ca,
             () => CertificateFactory.IssueAdminClientCertificate(ca, now.AddMinutes(-5), now.AddDays(LeafValidityDays)),
             now);
 
@@ -114,23 +115,34 @@ public sealed class SecretMaterialProvisioner(ILogger<SecretMaterialProvisioner>
     }
 
     private void EnsureLeafCertificate(
-        string certPath, string keyPath, string name, Func<X509Certificate2> issue, DateTimeOffset now)
+        string certPath, string keyPath, string name, X509Certificate2 ca, Func<X509Certificate2> issue, DateTimeOffset now)
     {
         if (File.Exists(certPath) && File.Exists(keyPath))
         {
             using var existing = X509Certificate2.CreateFromPemFile(certPath, keyPath);
             var notAfter = existing.NotAfter.ToUniversalTime();
 
-            if (notAfter > now.UtcDateTime.AddDays(RenewalWindowDays))
+            // Спершу — цілісність ланцюга до ПОТОЧНОГО CA. Якщо CA щойно перегенеровано (частковий
+            // restore/tamper: зник ca.key), старий leaf підписаний мертвим CA → «нове CA + старий leaf»
+            // = мовчки зламаний trust. Такий leaf переоформлюємо незалежно від терміну (лікує і
+            // історично неузгоджений том, не лише same-run регенерацію).
+            if (!ChainsToCa(existing, ca))
+            {
+                _logger.LogInformation(
+                    "Cert '{Name}' не будує ланцюг до поточного CA — переоформлення новим CA.", name);
+            }
+            else if (notAfter > now.UtcDateTime.AddDays(RenewalWindowDays))
             {
                 _logger.LogInformation(
                     "Переюз наявного cert '{Name}' (дійсний до {NotAfter:yyyy-MM-dd}).", name, notAfter);
                 return;
             }
-
-            _logger.LogInformation(
-                "Cert '{Name}' прострочений/близький до простроки ({NotAfter:yyyy-MM-dd}) — переоформлення тим самим CA.",
-                name, notAfter);
+            else
+            {
+                _logger.LogInformation(
+                    "Cert '{Name}' прострочений/близький до простроки ({NotAfter:yyyy-MM-dd}) — переоформлення тим самим CA.",
+                    name, notAfter);
+            }
         }
         else
         {
@@ -139,6 +151,19 @@ public sealed class SecretMaterialProvisioner(ILogger<SecretMaterialProvisioner>
 
         using var leaf = issue();
         WritePemPair(certPath, keyPath, leaf);
+    }
+
+    // Чи будує leaf ланцюг саме до цього CA (перевірка підпису/emitента, а не терміну — простроку
+    // обробляє окрема гілка). CustomRootTrust + NoCheck: без машинного сховища й без OCSP/CRL.
+    private static bool ChainsToCa(X509Certificate2 leaf, X509Certificate2 ca)
+    {
+        using var chain = new X509Chain();
+        chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+        chain.ChainPolicy.CustomTrustStore.Add(ca);
+        chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+        chain.ChainPolicy.VerificationFlags =
+            X509VerificationFlags.IgnoreNotTimeValid | X509VerificationFlags.IgnoreNotTimeNested;
+        return chain.Build(leaf);
     }
 
     private void EnsurePepper(string path, string name)
