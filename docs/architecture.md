@@ -69,7 +69,7 @@ flowchart TB
 
   ADP ==>|"типізовані виклики + server-wide in-flight semaphore (G6)"| LIB
 
-  subgraph LIB["SignalCli.NET — NuGet 4.10.0 (типізовані фасади)"]
+  subgraph LIB["SignalCli.NET — NuGet 4.10.1 (типізовані фасади)"]
     F1["ISignalAccounts / ISignalDevices / ISignalMessage / ISignalGroups\nтипізовані -4/-5/-6 на send-response (W12)"]
   end
 
