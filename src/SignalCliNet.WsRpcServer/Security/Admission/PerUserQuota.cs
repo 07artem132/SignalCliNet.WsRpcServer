@@ -22,9 +22,11 @@ namespace SignalCliNet.WsRpcServer.Security.Admission;
 /// </para>
 /// <para>
 /// <b>Approximation.</b> "Active" = identities that have appeared in the current window; a floor is
-/// reserved only once its identity is seen. If an identity floods before another ever appears, it may
-/// consume budget that would have covered the late-comer's floor — the floor guarantee holds only while
-/// Σ(active identities) × floor ≤ aggregate (documented on <see cref="AdmissionOptions"/>).
+/// reserved only once its identity is seen. Against a flooder that exhausts budget BEFORE any other
+/// identity appears, a hard per-identity ceiling of <c>aggregate − floor</c> keeps at least one floor's
+/// worth of aggregate headroom for a late-comer. Full fairness for N unknown late-comers is not
+/// attempted; the floor guarantee holds while Σ(active identities) × floor ≤ aggregate (documented on
+/// <see cref="AdmissionOptions"/>).
 /// </para>
 /// </remarks>
 public sealed class PerUserQuota
@@ -77,6 +79,16 @@ public sealed class PerUserQuota
                 committed += Math.Max(w.Used, _floor);
 
             if (committed >= _aggregate)
+                return false;
+
+            // G2-headroom для ЩЕ НЕ активних identity: Σ-умова вище резервує floor лише «побаченим»
+            // у вікні identity, тож heavy-юзер, що флудить ДО першої появи інших, з'їв би весь
+            // aggregate-бюджет і їхній floor став би недосяжним (діру зловив DoD 5.2 через реальний
+            // шлях). Тому одна identity ніколи не бере понад aggregate − floor: принаймні один
+            // floor-обсяг завжди лишається під агрегатом для латекамера. Наближення (повна
+            // справедливість для довільного N латекамерів вимагала б знати їх наперед) —
+            // задокументовано у <remarks>.
+            if (_floor > 0 && window.Used + 1 > _aggregate - _floor)
                 return false;
 
             window.Used++;

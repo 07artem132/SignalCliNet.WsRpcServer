@@ -80,4 +80,20 @@ public class PerUserQuotaTests
 
         Assert.True(quota.RetryAfterSeconds("A") > 0);
     }
+
+    [Fact]
+    public void Flooder_BeforeLateComerAppears_CannotEatWholeAggregate()
+    {
+        // Regression (діру зловив DoD 5.2 через живий шлях): heavy-юзер флудить ДО першої появи
+        // інших identity — Σ-умова бачить лише його, тож без hard-стелі він з'їв би весь aggregate
+        // і floor латекамера став би недосяжним на рівні БЮДЖЕТУ. Стеля: used ≤ aggregate − floor.
+        var quota = New(aggregate: 4, floor: 1, new TestTimeProvider(FixedTime));
+
+        Assert.True(quota.TryAdmit("heavy"));    // floor
+        Assert.True(quota.TryAdmit("heavy"));    // fair-share
+        Assert.True(quota.TryAdmit("heavy"));    // fair-share (стеля 4-1=3 досягнута)
+        Assert.False(quota.TryAdmit("heavy"));   // headroom латекамера недоторканий
+
+        Assert.True(quota.TryAdmit("late"));     // латекамер отримує свій floor
+    }
 }
