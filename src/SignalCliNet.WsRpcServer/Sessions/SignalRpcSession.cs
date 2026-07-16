@@ -15,6 +15,7 @@ using NetCoreServer;
 using SignalCliNet.WsRpcServer.Deployment;
 using SignalCliNet.WsRpcServer.Persistence;
 using SignalCliNet.WsRpcServer.Security;
+using SignalCliNet.WsRpcServer.Security.Admission;
 using SignalCliNet.WsRpcServer.Serialization;
 using StreamJsonRpc;
 using WsRpcServer.Core;
@@ -56,6 +57,18 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
     private readonly RevocationBroadcaster _revocationBroadcaster;
     private readonly RenewalRateLimiter _renewalRateLimiter;
 
+    // Section 3/4 admission-залежності (singletons/options з DI). Активні лише коли Admission:Enabled.
+    private readonly AdmissionControl _admissionControl;
+    private readonly IdentityConnectionLimiter _identityConnLimiter;
+    private readonly SignalCliGate _signalCliGate;
+    private readonly AdmissionOptions _admissionOptions;
+    private readonly TimeProvider _timeProvider;
+
+    private int _identitySlotHeld;              // 0/1 — тримаємо per-identity conn-слот (release рівно раз)
+    private MessageRateLimiter? _msgRateLimiter; // per-connection token-bucket (msg-rate); null коли вимкнено
+    private Timer? _idleTimer;                   // idle-timeout таймер (переармовується на кожен data-кадр)
+    private TimeSpan _idleTimeout;               // тривалість idle-вікна (з AdmissionOptions)
+
     // Чиста стан-машина переходів; доступ серіалізуємо через _authLock (сесію смикають кілька потоків:
     // accept-шлях, IO-потік, callback таймера, callback revoke).
     private readonly SessionAuthStateMachine _authMachine;
@@ -96,7 +109,12 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
         IDurableStore store,
         UnauthenticatedConnectionLimiter unauthLimiter,
         RevocationBroadcaster revocationBroadcaster,
-        RenewalRateLimiter renewalRateLimiter)
+        RenewalRateLimiter renewalRateLimiter,
+        AdmissionControl admissionControl,
+        IdentityConnectionLimiter identityConnLimiter,
+        SignalCliGate signalCliGate,
+        IOptions<AdmissionOptions> admissionOptions,
+        TimeProvider timeProvider)
         : base(server, logger, config)
     {
         _eventProcessor = eventProcessor ?? throw new ArgumentNullException(nameof(eventProcessor));
@@ -109,6 +127,11 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
         _unauthLimiter = unauthLimiter ?? throw new ArgumentNullException(nameof(unauthLimiter));
         _revocationBroadcaster = revocationBroadcaster ?? throw new ArgumentNullException(nameof(revocationBroadcaster));
         _renewalRateLimiter = renewalRateLimiter ?? throw new ArgumentNullException(nameof(renewalRateLimiter));
+        _admissionControl = admissionControl ?? throw new ArgumentNullException(nameof(admissionControl));
+        _identityConnLimiter = identityConnLimiter ?? throw new ArgumentNullException(nameof(identityConnLimiter));
+        _signalCliGate = signalCliGate ?? throw new ArgumentNullException(nameof(signalCliGate));
+        _admissionOptions = (admissionOptions ?? throw new ArgumentNullException(nameof(admissionOptions))).Value;
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
 
         _authMachine = new SessionAuthStateMachine(_authOptions.Enabled);
 
@@ -280,6 +303,37 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
         ReleaseUnauthSlot();
         StopAuthTimer();
 
+        // Транспортні ліміти (admission, tasks 3.2/3.3) — лише коли Admission:Enabled. Вимкнено ⇒ усі
+        // нові параметри chokepoint'а null/0, тож поведінка ідентична попередній (опт-ін, як auth).
+        Func<IReadOnlyList<string>, AdmissionDecision>? admitSends = null;
+        SignalCliGate? gate = null;
+        var maxInFlight = 0;
+        if (_admissionOptions.Enabled)
+        {
+            // Per-identity conn cap: слот бере ЛИШЕ token-principal; loopback (Disabled) поза cap —
+            // у нього немає identity. Перевищення cap → close 4429 (too-many-connections), без активації.
+            if (_identityId is not null)
+            {
+                if (!_identityConnLimiter.TryAcquire(_identityId))
+                {
+                    Logger.LogWarning(
+                        "Сесія {ClientId}: перевищено per-identity cap конектів ({Max}) — close 4429.",
+                        Id, _identityConnLimiter.Max);
+                    CloseRateLimited(AuthCloseCodes.RateLimited, RateLimitCloseReasons.TooManyConnections);
+                    return;
+                }
+
+                Volatile.Write(ref _identitySlotHeld, 1);
+            }
+
+            // Admission-identity: token → реальна identity; loopback (auth вимкнено, admission увімкнено)
+            // → спільний ключ "loopback" (спільний бюджет/floor на одну identity — задокументовано).
+            var admissionIdentity = _identityId ?? "loopback";
+            admitSends = recipients => _admissionControl.Admit(admissionIdentity, recipients);
+            gate = _signalCliGate;
+            maxInFlight = _admissionOptions.MaxInFlightPerConnection;
+        }
+
         try
         {
             // D9/1.5: для token-сесій передаємо замикання re-чеку живучості (по збереженому tokenHash,
@@ -288,7 +342,9 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
 
             // V9: pre-dispatch chokepoint замість голого JsonRpc — кожен виклик проходить герметичний
             // default-deny + IDOR-guard + санітизацію помилок. Principal сесії читається per-invocation.
-            JsonRpc = new AuthorizingSignalJsonRpc(_messageHandler, principal, _policyRegistry, Logger, isCredentialLive);
+            // admitSends/gate/maxInFlight — send-admission (W16) + G6-гейт + in-flight cap (лише коли увімкнено).
+            JsonRpc = new AuthorizingSignalJsonRpc(
+                _messageHandler, principal, _policyRegistry, Logger, isCredentialLive, admitSends, gate, maxInFlight);
 
             // Configure JSON-RPC
             JsonRpc.CancelLocallyInvokedMethodsWhenConnectionIsClosed = true;
@@ -309,6 +365,16 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
 
             // Start notification processing
             _processingTask = ProcessNotificationsAsync(_cts.Token);
+
+            // Per-connection msg-rate bucket + idle-таймер (task 3.2) — лише коли admission увімкнено.
+            // Bucket: ємність = MessagesPerMinutePerConnection, рефіл 1хв монотонним годинником (D15).
+            if (_admissionOptions.Enabled)
+            {
+                _msgRateLimiter = new MessageRateLimiter(
+                    _admissionOptions.MessagesPerMinutePerConnection, TimeSpan.FromMinutes(1), _timeProvider);
+                _idleTimeout = TimeSpan.FromMinutes(_admissionOptions.IdleTimeoutMinutes);
+                _idleTimer = new Timer(_ => OnIdleTimeout(), null, _idleTimeout, Timeout.InfiniteTimeSpan);
+            }
 
             Logger.LogInformation("Сесія {ClientId} активована (principal {Principal}).", Id, principal.Name);
         }
@@ -551,7 +617,9 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
         }
 
         ReleaseUnauthSlot();
+        ReleaseIdentitySlot();   // звільняємо per-identity conn-слот (ідемпотентно; loopback — no-op)
         StopAuthTimer();
+        StopIdleTimer();
         ClearPopState();   // nonce one-time — не лишаємо в пам'яті після teardown
         _revocationSubscription?.Dispose();
         _revocationSubscription = null;
@@ -627,6 +695,24 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
             {
                 HandlePreAuthMessage(buffer, offset, size);
                 return;
+            }
+
+            // Msg-rate + idle (admission, task 3.2): лише активні/loopback-сесії при Enabled. Сюди доходять
+            // ЛИШЕ data-кадри (ping/pong обробляє OnWsPing у базі), тож token-bucket рахує саме RPC-трафік.
+            if (_admissionOptions.Enabled)
+            {
+                var limiter = _msgRateLimiter;
+                if (limiter is not null && !limiter.TryConsume())
+                {
+                    var retry = limiter.RetryAfterSeconds();
+                    Logger.LogWarning(
+                        "Сесія {ClientId}: перевищено msg-rate — close 4429 (retry {Retry}s).", Id, retry);
+                    CloseRateLimited(AuthCloseCodes.RateLimited, RateLimitCloseReasons.FormatMessageRate(retry));
+                    return;
+                }
+
+                // Прийнятий кадр — переармовуємо idle-таймер (мовчання довше за вікно → close 1000).
+                ArmIdleTimer();
             }
 
             // NetCoreServer has already handled WebSocket fragmentation, pass the complete message to the handler
@@ -875,6 +961,66 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
             _unauthLimiter.Release(_remoteIp);
     }
 
+    // Закриває сесію транспортним rate/admission close-кодом (4429 conn-cap/msg-rate; 1000 idle) із
+    // машиночитним reason. НЕ auth-подія: не проганяємо через token/pop-переходи, лише позначаємо
+    // стан-машину термінальною й глушимо таймери; per-identity conn-слот звільнить teardown (ідемпотентно).
+    private void CloseRateLimited(int code, string reason)
+    {
+        lock (_authLock)
+        {
+            _authMachine.OnClosed();
+        }
+
+        ReleaseUnauthSlot();
+        StopAuthTimer();
+        StopIdleTimer();
+
+        Logger.LogInformation("Сесія {ClientId}: rate-limit close {Code} ({Reason}).", Id, code, reason);
+        Close(code, reason);
+    }
+
+    // Idle-timeout: сесія мовчала довше за вікно → штатний close 1000 (НЕ 4429 — це не rate-подія).
+    private void OnIdleTimeout()
+    {
+        if (IsDisposed)
+            return;
+
+        Logger.LogInformation("Сесія {ClientId}: idle-timeout — close 1000.", Id);
+        CloseRateLimited((int)WebSocketCloseStatus.NormalClosure, RateLimitCloseReasons.IdleTimeout);
+    }
+
+    // Переармовує idle-таймер на кожен прийнятий data-кадр (той самий патерн, що auth-таймер; тут через
+    // Change, бо таймер уже створено при активації). Гонка з teardown-диспоузом — benign (ловимо).
+    private void ArmIdleTimer()
+    {
+        var timer = _idleTimer;
+        if (timer is null)
+            return;
+
+        try
+        {
+            timer.Change(_idleTimeout, Timeout.InfiniteTimeSpan);
+        }
+        catch (ObjectDisposedException)
+        {
+            // teardown уже диспоузнув таймер між читанням поля й Change — ігноруємо.
+        }
+    }
+
+    private void StopIdleTimer()
+    {
+        var timer = Interlocked.Exchange(ref _idleTimer, null);
+        timer?.Dispose();
+    }
+
+    private void ReleaseIdentitySlot()
+    {
+        // Ідемпотентно: рівно один release на успішний acquire (патерн unauth-слота). Loopback-сесії
+        // слота не брали (_identitySlotHeld=0) → no-op.
+        if (Interlocked.Exchange(ref _identitySlotHeld, 0) == 1 && _identityId is not null)
+            _identityConnLimiter.Release(_identityId);
+    }
+
     private bool IsOriginAllowed(string origin) =>
         _authOptions.AllowedOrigins is { Length: > 0 } allowed &&
         allowed.Any(o => string.Equals(o, origin, StringComparison.OrdinalIgnoreCase));
@@ -978,6 +1124,7 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
                 Logger.LogDebug("Disposing resources for client {ClientId}", Id);
                 _cts.Dispose();
                 StopAuthTimer();
+                StopIdleTimer();
                 _revocationSubscription?.Dispose();
 
                 // Other resources are disposed in the Disconnect process

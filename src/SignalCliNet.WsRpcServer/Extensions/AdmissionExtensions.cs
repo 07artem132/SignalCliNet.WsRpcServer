@@ -49,6 +49,11 @@ public static class AdmissionExtensions
         services.TryAddSingleton<NewRecipientTracker>();
         services.TryAddSingleton<AdmissionControl>();
 
+        // Транспортні ліміти (task 3.2/3.3): per-identity conn cap + server-wide signal-cli гейт (G6).
+        // Обидва — singletons; активні лише коли Enabled=true (сесія/chokepoint передають їх лише тоді).
+        services.TryAddSingleton<IdentityConnectionLimiter>();
+        services.TryAddSingleton<SignalCliGate>();
+
         // Системний час (монотонний для вікон, wall-clock для міток). TryAdd — ідемпотентно з AddAuthnCore.
         services.TryAddSingleton(TimeProvider.System);
 

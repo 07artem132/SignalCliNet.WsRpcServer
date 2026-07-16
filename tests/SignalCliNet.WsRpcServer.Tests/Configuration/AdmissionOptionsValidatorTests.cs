@@ -18,6 +18,11 @@ public class AdmissionOptionsValidatorTests
         PerUserFloorPerWindow = 10,
         NewRecipientsPerWindow = 5,
         ReserveBlockSize = 10,
+        MaxConnectionsPerIdentity = 4,
+        MessagesPerMinutePerConnection = 100,
+        IdleTimeoutMinutes = 30,
+        MaxInFlightPerConnection = 8,
+        SignalCliConcurrencyLimit = 4,
     };
 
     [Fact]
@@ -73,6 +78,58 @@ public class AdmissionOptionsValidatorTests
     {
         var options = Valid();
         options.ReserveBlockSize = value;
+        Assert.True(new AdmissionOptionsValidator().Validate(null, options).Failed);
+    }
+
+    // ── Транспортні ліміти (task 3.2/3.3) ──────────────────────────────────────────────────────
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(257)]
+    public void MaxConnectionsPerIdentity_OutOfRange_Fails(int value)
+    {
+        var options = Valid();
+        options.MaxConnectionsPerIdentity = value;
+        Assert.True(new AdmissionOptionsValidator().Validate(null, options).Failed);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(10001)]
+    public void MessagesPerMinutePerConnection_OutOfRange_Fails(int value)
+    {
+        var options = Valid();
+        options.MessagesPerMinutePerConnection = value;
+        Assert.True(new AdmissionOptionsValidator().Validate(null, options).Failed);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1441)]
+    public void IdleTimeoutMinutes_OutOfRange_Fails(int value)
+    {
+        var options = Valid();
+        options.IdleTimeoutMinutes = value;
+        Assert.True(new AdmissionOptionsValidator().Validate(null, options).Failed);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(257)]
+    public void MaxInFlightPerConnection_OutOfRange_Fails(int value)
+    {
+        var options = Valid();
+        options.MaxInFlightPerConnection = value;
+        Assert.True(new AdmissionOptionsValidator().Validate(null, options).Failed);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(65)]
+    public void SignalCliConcurrencyLimit_OutOfRange_Fails(int value)
+    {
+        var options = Valid();
+        options.SignalCliConcurrencyLimit = value;
         Assert.True(new AdmissionOptionsValidator().Validate(null, options).Failed);
     }
 

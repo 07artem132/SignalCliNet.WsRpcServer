@@ -1,10 +1,13 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
+using Microsoft.Extensions.Options;
 using Nerdbank.Streams;
 using SignalCli.Models.Signal.Accounts;
 using SignalCli.Models.Signal.Groups;
+using SignalCliNet.WsRpcServer.Deployment;
 using SignalCliNet.WsRpcServer.Security;
+using SignalCliNet.WsRpcServer.Security.Admission;
 using SignalCliNet.WsRpcServer.Serialization;
 using StreamJsonRpc;
 using Xunit;
@@ -232,7 +235,179 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
         Assert.False(RecipientValidator.IsValidGroupId(""));
     }
 
+    // ---------- 3.2/4.1 Admission (W16): send-deny → -32005 + data.retry_after ----------
+
+    [Fact]
+    public async Task Admission_DeniesSend_Returns32005_WithInBandRetryAfter_TargetNotReached()
+    {
+        var target = new MessageTarget();
+        var admissionCalled = false;
+        // admitSends деніїть із retry_after=42 (як AggregateBudget-deny).
+        Func<IReadOnlyList<string>, AdmissionDecision> deny = _ =>
+        {
+            admissionCalled = true;
+            return new AdmissionDecision(false, AdmissionDenyReason.AggregateBudget, 42);
+        };
+        var client = CreatePair(SignalPrincipal.LoopbackFullAccess, target, admitSends: deny);
+
+        var ex = await Assert.ThrowsAsync<RemoteInvocationException>(
+            () => client.InvokeWithParameterObjectAsync<string>("sendTextMessage", new
+            {
+                account = AccountA,
+                recipients = new[] { AccountB },
+                message = "hi",
+            }));
+
+        Assert.True(admissionCalled, "Send-метод МУСИТЬ проходити admission.");
+        Assert.Equal(AdmissionErrorCodes.RateLimited, ex.ErrorCode); // -32005
+        // Повідомлення без PII (recipients/тіла).
+        Assert.DoesNotContain(AccountB, ex.Message, StringComparison.Ordinal);
+        Assert.False(target.Invoked, "Відхилений admission-ом send не сміє дійти до signal-cli.");
+        // NB: сам drіт-контракт error.data={"retry_after":N} пінить окремий серіалізаційний тест нижче —
+        // .NET-клієнт StreamJsonRpc за замовчуванням десеріалізує custom error.data у CommonErrorData
+        // (втрачаючи retry_after), тож round-trip тут перевіряє КОД, а не форму data (її бачить raw-WS клієнт).
+    }
+
+    [Fact]
+    public void RateLimitErrorData_WireShape_IsSnakeCaseRetryAfter()
+    {
+        // Форматтер дзеркалить продакшн (camelCase-політика + source-gen контекст). [JsonPropertyName]
+        // фіксує snake_case retry_after на дроті — саме це читає браузерний WS-клієнт in-band (S9).
+        var options = CreateFormatter().JsonSerializerOptions;
+
+        var json = JsonSerializer.Serialize(new RateLimitErrorData(42), options);
+
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal(42, doc.RootElement.GetProperty("retry_after").GetInt32());
+    }
+
+    [Fact]
+    public async Task Admission_AdmitsSend_Passes_TargetReached()
+    {
+        var target = new MessageTarget();
+        Func<IReadOnlyList<string>, AdmissionDecision> allow = _ => AdmissionDecision.Allow;
+        var client = CreatePair(SignalPrincipal.LoopbackFullAccess, target, admitSends: allow);
+
+        var result = await client.InvokeWithParameterObjectAsync<string>("sendTextMessage", new
+        {
+            account = AccountA,
+            recipients = new[] { AccountB },
+            message = "hi",
+        });
+
+        Assert.Equal("sent", result);
+        Assert.True(target.Invoked);
+    }
+
+    [Fact]
+    public async Task Admission_NotConsulted_ForNonSendMethod()
+    {
+        var admissionCalled = false;
+        Func<IReadOnlyList<string>, AdmissionDecision> spy = _ =>
+        {
+            admissionCalled = true;
+            return AdmissionDecision.Allow;
+        };
+        // listAccounts не має recipients-аргумента у політиці → admission НЕ викликається.
+        var target = new AccountsTarget(AccountA);
+        var client = CreatePair(UserPrincipal(AccountA), target, admitSends: spy);
+
+        await client.InvokeAsync<ListAccountsResponse>("listAccounts");
+
+        Assert.False(admissionCalled, "Non-send метод не сміє консультувати admission (немає recipients).");
+    }
+
+    // ---------- 3.3 In-flight cap (D12) + G6 signal-cli гейт → -32005 ----------
+
+    [Fact]
+    public async Task InFlightCap_ExcessConcurrentSend_Returns32005_AndCounterReturns()
+    {
+        var target = new BlockingMessageTarget();
+        // Cap=2: два паралельні send зависають у таргеті, третій — понад cap → -32005.
+        var client = CreatePair(SignalPrincipal.LoopbackFullAccess, target, maxInFlight: 2);
+
+        var t1 = client.InvokeWithParameterObjectAsync<string>("sendTextMessage", SendArgs());
+        var t2 = client.InvokeWithParameterObjectAsync<string>("sendTextMessage", SendArgs());
+        var t3 = client.InvokeWithParameterObjectAsync<string>("sendTextMessage", SendArgs());
+
+        // Чекаємо, поки рівно 2 виклики увійдуть у таргет (тримають in-flight слоти).
+        await WaitUntilAsync(() => Volatile.Read(ref target.Entered) == 2);
+
+        // Рівно один із трьох отримує -32005 (понад cap), не дійшовши до таргета.
+        var rejected = await Assert.ThrowsAsync<RemoteInvocationException>(async () =>
+            await Task.WhenAny(t1, t2, t3).Unwrap());
+        Assert.Equal(AdmissionErrorCodes.RateLimited, rejected.ErrorCode);
+        Assert.Equal(2, Volatile.Read(ref target.Entered)); // третій таргета не торкнувся
+
+        // Відпускаємо блоковані — вони завершуються успішно, лічильник повертається.
+        target.Release();
+        var results = await Task.WhenAll(
+            new[] { t1, t2, t3 }.Select(async t =>
+            {
+                try { return await t; }
+                catch (RemoteInvocationException) { return "rejected"; }
+            }));
+        Assert.Equal(2, results.Count(r => r == "sent"));
+        Assert.Equal(1, results.Count(r => r == "rejected"));
+
+        // Лічильник повернувся: after Release() таргет більше не блокує, а in-flight = 0 —
+        // черговий send на тій самій сесії проходить попри той самий cap=2.
+        var ok = await client.InvokeWithParameterObjectAsync<string>("sendTextMessage", SendArgs());
+        Assert.Equal("sent", ok);
+    }
+
+    [Fact]
+    public async Task SignalCliGate_WhenFull_Returns32005_TargetNotReached()
+    {
+        var target = new MessageTarget();
+        // Гейт на 1 слот, який ми зайняли ЗЗОВНІ — будь-який не-Public dispatch застає його повним.
+        using var gate = new SignalCliGate(Options.Create(new AdmissionOptions { SignalCliConcurrencyLimit = 1 }));
+        Assert.True(gate.TryEnter()); // окупуємо єдиний слот
+
+        var client = CreatePair(SignalPrincipal.LoopbackFullAccess, target, signalCliGate: gate);
+
+        var ex = await Assert.ThrowsAsync<RemoteInvocationException>(
+            () => client.InvokeWithParameterObjectAsync<string>("sendTextMessage", SendArgs()));
+
+        Assert.Equal(AdmissionErrorCodes.RateLimited, ex.ErrorCode);
+        Assert.False(target.Invoked, "Зайнятий G6-гейт не сміє пускати dispatch до signal-cli.");
+    }
+
+    [Fact]
+    public async Task PublicMethod_BypassesGate_EvenWhenFull()
+    {
+        var target = new PingTarget();
+        // Гейт повний, in-flight cap=1 — Public-метод (ping) МУСИТЬ пройти повз обидва.
+        using var gate = new SignalCliGate(Options.Create(new AdmissionOptions { SignalCliConcurrencyLimit = 1 }));
+        Assert.True(gate.TryEnter());
+
+        var client = CreatePair(
+            SignalPrincipal.LoopbackFullAccess, target, signalCliGate: gate, maxInFlight: 1);
+
+        var result = await client.InvokeAsync<string>("ping");
+
+        Assert.Equal("pong", result);
+    }
+
     // ---------- Harness ----------
+
+    private static object SendArgs() => new
+    {
+        account = AccountA,
+        recipients = new[] { AccountB },
+        message = "hi",
+    };
+
+    private static async Task WaitUntilAsync(Func<bool> condition, int timeoutMs = 5000)
+    {
+        var deadline = Environment.TickCount64 + timeoutMs;
+        while (!condition())
+        {
+            if (Environment.TickCount64 > deadline)
+                throw new TimeoutException("Умова не настала у відведений час.");
+            await Task.Delay(10);
+        }
+    }
 
     private static SignalPrincipal UserPrincipal(string account, params string[] groups) =>
         new($"user-{account[^4..]}", isAdmin: false, hasFullAccess: false, [account], groups);
@@ -244,7 +419,9 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
     /// як у продакшн-registry.
     /// </summary>
     private JsonRpc CreatePair(
-        SignalPrincipal principal, object target, string? principalName = null, Func<bool>? isCredentialLive = null)
+        SignalPrincipal principal, object target, string? principalName = null, Func<bool>? isCredentialLive = null,
+        Func<IReadOnlyList<string>, AdmissionDecision>? admitSends = null, SignalCliGate? signalCliGate = null,
+        int maxInFlight = 0)
     {
         if (principalName is not null)
             principal = new SignalPrincipal(
@@ -258,7 +435,10 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
             principal,
             new SignalRpcPolicyRegistry(),
             logger: null,
-            isCredentialLive: isCredentialLive);
+            isCredentialLive: isCredentialLive,
+            admitSends: admitSends,
+            signalCliGate: signalCliGate,
+            maxInFlightPerConnection: maxInFlight);
         server.AddLocalRpcTarget(target, new JsonRpcTargetOptions
         {
             MethodNameTransform = CommonMethodNameTransforms.CamelCase,
@@ -311,6 +491,28 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
             LastAccount = account;
             return Task.FromResult("sent");
         }
+    }
+
+    // Send-таргет, що зависає всередині dispatch до Release — для тесту in-flight cap (тримає слоти).
+    private sealed class BlockingMessageTarget
+    {
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int Entered;   // Interlocked — скільки викликів увійшло в тіло (тримають in-flight слот)
+
+        public void Release() => _release.TrySetResult();
+
+        public async Task<string> SendTextMessage(string account, List<string> recipients, string message)
+        {
+            Interlocked.Increment(ref Entered);
+            await _release.Task.ConfigureAwait(false);
+            return "sent";
+        }
+    }
+
+    private sealed class PingTarget
+    {
+        public Task<string> Ping() => Task.FromResult("pong");
     }
 
     private sealed class AccountsTarget(params string[] numbers)

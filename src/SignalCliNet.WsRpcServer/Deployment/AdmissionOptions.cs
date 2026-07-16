@@ -58,4 +58,46 @@ public sealed class AdmissionOptions
     /// </summary>
     [Range(1, 1000)]
     public int ReserveBlockSize { get; set; } = 10;
+
+    // ── Транспортні ліміти (task 3.2/3.3) — діють лише при Enabled=true ──────────────────────────
+    // (auth-timeout НЕ тут: він у AuthOptions.AuthTimeoutSeconds — не дублюємо; див. docs cross-ref.)
+
+    /// <summary>
+    /// Maximum concurrent authenticated WebSocket sessions per identity (task 3.2, 1..256). Default 4.
+    /// Enforced by <c>IdentityConnectionLimiter</c>; an over-cap session is closed <c>4429</c>
+    /// (<c>too-many-connections</c>). Loopback (auth-disabled) sessions carry no identity and are exempt.
+    /// </summary>
+    [Range(1, 256)]
+    public int MaxConnectionsPerIdentity { get; set; } = 4;
+
+    /// <summary>
+    /// Per-connection message-rate ceiling: accepted data frames per minute (token-bucket capacity =
+    /// burst; task 3.2, 1..10000). Default 100. Exceeding it closes the socket <c>4429</c>
+    /// (<c>message-rate:&lt;sec&gt;</c>). WS ping/pong frames are NOT counted (they never reach the
+    /// data-frame path).
+    /// </summary>
+    [Range(1, 10000)]
+    public int MessagesPerMinutePerConnection { get; set; } = 100;
+
+    /// <summary>
+    /// Idle timeout in minutes: a session silent (no accepted data frame) for this long is closed with a
+    /// normal <c>1000</c> (<c>idle-timeout</c>; task 3.2, 1..1440). Default 30. This is NOT an auth event.
+    /// </summary>
+    [Range(1, 1440)]
+    public int IdleTimeoutMinutes { get; set; } = 30;
+
+    /// <summary>
+    /// Maximum concurrent in-flight RPC dispatches per connection (D12, task 3.3, 1..256). Default 8.
+    /// Exceeding it refuses the request immediately with <c>-32005</c> (<c>retry_after=1</c>) — no queue.
+    /// </summary>
+    [Range(1, 256)]
+    public int MaxInFlightPerConnection { get; set; } = 8;
+
+    /// <summary>
+    /// Server-wide concurrency limit for signal-cli dispatch (G6, task 3.3, 1..64). Default 4. Acquired
+    /// non-blocking by <c>SignalCliGate</c>; when full, the request is refused with <c>-32005</c>
+    /// (<c>retry_after=1</c>) so the upstream pending queue never grows unbounded.
+    /// </summary>
+    [Range(1, 64)]
+    public int SignalCliConcurrencyLimit { get; set; } = 4;
 }

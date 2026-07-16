@@ -80,6 +80,10 @@ public sealed class AuthnHandshakeDodTests : IAsyncLifetime
         // Реальний authn-стек (пеппер/токени/limiter/broadcaster/enrollment) — як у проді.
         services.AddAuthnCore(configuration);
 
+        // Admission-стек (chokepoint-залежності сесії): AdmissionControl + limiter'и + AdmissionOptions.
+        // Enabled=false за замовчуванням — handshake-поведінка незмінна; тут лише щоб DI резолвив сесію.
+        services.AddAdmissionCore(configuration);
+
         // Framework-конфіг сесії; host/port сюди не йдуть (сервер конструюємо вручну нижче).
         services.AddSingleton(new JsonRpcServerConfig());
 

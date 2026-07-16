@@ -4,6 +4,7 @@ using SignalCli.Models.Signal.Devices;
 using SignalCli.Models.Signal.Events;
 using SignalCli.Models.Signal.Message;
 using SignalCliNet.WsRpcServer.Model;
+using SignalCliNet.WsRpcServer.Security.Admission;
 using WsRpcServer;
 using WsRpcServer.Events;
 
@@ -28,6 +29,7 @@ namespace SignalCliNet.WsRpcServer.Serialization;
 [JsonSerializable(typeof(RpcNotification))]
 [JsonSerializable(typeof(HandshakeResponse))]
 [JsonSerializable(typeof(ApiVersionRequirement))]
+[JsonSerializable(typeof(RateLimitErrorData))]
 [JsonSerializable(typeof(ListAccountsResponse))]
 [JsonSerializable(typeof(SyncAccountsResponse))]
 [JsonSerializable(typeof(StartLinkResponse))]

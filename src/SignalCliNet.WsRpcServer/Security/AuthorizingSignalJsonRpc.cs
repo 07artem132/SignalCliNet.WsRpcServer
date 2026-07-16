@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using SignalCliNet.WsRpcServer.Security.Admission;
 using StreamJsonRpc;
 using StreamJsonRpc.Protocol;
 using WsRpcServer.Exceptions;
@@ -30,6 +31,12 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
     private readonly IRpcPolicyRegistry _policies;
     private readonly ILogger? _logger;
     private readonly Func<bool>? _isCredentialLive;
+    private readonly Func<IReadOnlyList<string>, AdmissionDecision>? _admitSends;
+    private readonly SignalCliGate? _signalCliGate;
+    private readonly int _maxInFlight;
+
+    // Per-connection лічильник in-flight RPC (D12). Interlocked inc на вході dispatch / dec у finally.
+    private int _inFlight;
 
     /// <summary>
     /// Creates the authorizing JSON-RPC chokepoint.
@@ -44,18 +51,40 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
     /// (sanitized <c>-32601</c>) — so a revoked/expired token session stops dispatching mid-connection.
     /// <c>null</c> (loopback sessions) preserves the unchanged behaviour.
     /// </param>
+    /// <param name="admitSends">
+    /// Optional send-admission closure (W16, task 3.2/4.1). When supplied, it is invoked ONLY for
+    /// send-like methods (those whose policy declares a <c>recipients</c> argument), AFTER the authz
+    /// policy and inbound guards but BEFORE dispatch; a denied decision short-circuits to <c>-32005</c>
+    /// with an in-band <c>retry_after</c>. <c>null</c> (admission disabled) skips admission entirely.
+    /// </param>
+    /// <param name="signalCliGate">
+    /// Optional server-wide non-blocking concurrency gate (G6, task 3.3) acquired around dispatch of
+    /// non-<see cref="RpcPolicyKind.Public"/> methods. When full, the call is refused with <c>-32005</c>
+    /// (<c>retry_after=1</c>). <c>null</c> (admission disabled) leaves dispatch ungated.
+    /// </param>
+    /// <param name="maxInFlightPerConnection">
+    /// Per-connection in-flight dispatch cap (D12, task 3.3) for non-<see cref="RpcPolicyKind.Public"/>
+    /// methods. <c>0</c> (admission disabled) means no cap. Exceeding it refuses immediately with
+    /// <c>-32005</c> (<c>retry_after=1</c>) — no queue.
+    /// </param>
     public AuthorizingSignalJsonRpc(
         IJsonRpcMessageHandler messageHandler,
         SignalPrincipal principal,
         IRpcPolicyRegistry policies,
         ILogger? logger = null,
-        Func<bool>? isCredentialLive = null)
+        Func<bool>? isCredentialLive = null,
+        Func<IReadOnlyList<string>, AdmissionDecision>? admitSends = null,
+        SignalCliGate? signalCliGate = null,
+        int maxInFlightPerConnection = 0)
         : base(messageHandler)
     {
         _principal = principal ?? throw new ArgumentNullException(nameof(principal));
         _policies = policies ?? throw new ArgumentNullException(nameof(policies));
         _logger = logger;
         _isCredentialLive = isCredentialLive;
+        _admitSends = admitSends;
+        _signalCliGate = signalCliGate;
+        _maxInFlight = maxInFlightPerConnection;
     }
 
     /// <inheritdoc />
@@ -104,21 +133,90 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
             };
         }
 
-        // 3. Диспетч цільового методу; principal публікуємо в call-context на час виклику (V8).
-        JsonRpcMessage response;
-        using (SignalCallContext.Enter(_principal))
+        // 2b. Admission (W16, tasks 3.2/4.1): ЛИШЕ для send-like методів (політика несе recipients).
+        //     Виконується ПІСЛЯ authz-політики й guard-ів (default-deny перший), ДО dispatch. Deny →
+        //     -32005 з in-band retry_after (S9). recipients витягуємо тим самим шляхом, що й guard (D11).
+        if (_admitSends is not null && policy.RecipientsArgName is not null)
         {
-            response = await base.DispatchRequestAsync(request, targetMethod, cancellationToken).ConfigureAwait(false);
+            var recipients = ExtractStringList(request, policy.RecipientsArgName, policy.RecipientsArgIndex);
+            var decision = _admitSends(recipients);
+            if (!decision.Admitted)
+            {
+                // privacy: логуємо лише метод/причину/retry — БЕЗ recipients і тіла.
+                _logger?.LogInformation(
+                    "Chokepoint: send {Method} відхилено admission ({Reason}, retry_after={RetryAfter}s) → -32005",
+                    method, decision.Reason, decision.RetryAfterSeconds);
+                return RateLimitedError(request, decision.RetryAfterSeconds);
+            }
         }
 
-        // 4. Outbound-фільтр (AccountQuery) — fail-closed, лише для успішного результату.
-        if (policy.Output != ReadOutputKind.None && response is JsonRpcResult result)
+        // 3. Per-connection in-flight cap (D12) + server-wide G6-гейт до signal-cli — ЛИШЕ для не-Public
+        //    методів (ping/handshake повз обидва). Обидва короткозамикають на -32005 (retry_after=1) без
+        //    черги. Диспетч цільового методу — між акваєрами; principal у call-context на час виклику (V8).
+        var gated = policy.Kind != RpcPolicyKind.Public;
+        var inFlightHeld = false;
+        var gateHeld = false;
+        try
         {
-            result.Result = ReadOutputFilter.Filter(policy.Output, _principal, result.Result, _logger);
-        }
+            if (gated && _maxInFlight > 0)
+            {
+                var current = Interlocked.Increment(ref _inFlight);
+                inFlightHeld = true;
+                if (current > _maxInFlight)
+                {
+                    _logger?.LogInformation(
+                        "Chokepoint: {Method} понад per-connection in-flight cap ({Max}) → -32005", method, _maxInFlight);
+                    return RateLimitedError(request, 1);
+                }
+            }
 
-        return response;
+            if (gated && _signalCliGate is not null)
+            {
+                if (!_signalCliGate.TryEnter())
+                {
+                    _logger?.LogInformation(
+                        "Chokepoint: {Method} — signal-cli гейт зайнятий (G6) → -32005", method);
+                    return RateLimitedError(request, 1);
+                }
+
+                gateHeld = true;
+            }
+
+            JsonRpcMessage response;
+            using (SignalCallContext.Enter(_principal))
+            {
+                response = await base.DispatchRequestAsync(request, targetMethod, cancellationToken).ConfigureAwait(false);
+            }
+
+            // 4. Outbound-фільтр (AccountQuery) — fail-closed, лише для успішного результату.
+            if (policy.Output != ReadOutputKind.None && response is JsonRpcResult result)
+            {
+                result.Result = ReadOutputFilter.Filter(policy.Output, _principal, result.Result, _logger);
+            }
+
+            return response;
+        }
+        finally
+        {
+            // Звільняємо у зворотному порядку; кожен — рівно раз (навіть на ранньому -32005-return).
+            if (gateHeld)
+                _signalCliGate!.Exit();
+            if (inFlightHeld)
+                Interlocked.Decrement(ref _inFlight);
+        }
     }
+
+    // Детермінований JSON-RPC -32005 (rate-limit) з in-band retry_after у error.data (A1: без секретів).
+    private static JsonRpcError RateLimitedError(JsonRpcRequest request, int retryAfterSeconds) => new()
+    {
+        RequestId = request.RequestId,
+        Error = new JsonRpcError.ErrorDetail
+        {
+            Code = (JsonRpcErrorCode)AdmissionErrorCodes.RateLimited,
+            Message = AdmissionErrorCodes.RateLimitedMessage,
+            Data = new RateLimitErrorData(retryAfterSeconds),
+        },
+    };
 
     // Проганяє inbound-перевірки, які МУСЯТЬ відпрацювати до dispatch: жоден малформований чи
     // неавторизований виклик не доходить до signal-cli.

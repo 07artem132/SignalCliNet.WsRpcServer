@@ -40,6 +40,8 @@ services:
       # Docker пробрасує трафік на 0.0.0.0 контейнера, тож app МУСИТЬ біндити 0.0.0.0.
       Server__Host: "0.0.0.0"
       Server__Port: "9000"
+      # V3: стеля розміру кадру 64KB (дефолт деплою; framework-дефолт 100MB завеликий).
+      Server__MaxMessageSizeBytes: "65536"
       # D4 (fail-closed): не-loopback bind дозволений лише зі свідомим opt-in оператора + TLS попереду.
       # Тут безпечно: порт не публікується на хост, а TLS термінується reverse-proxy у тій же мережі.
       Server__AllowNonLoopback: "true"
