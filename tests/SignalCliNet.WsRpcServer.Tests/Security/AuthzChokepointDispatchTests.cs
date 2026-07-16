@@ -167,6 +167,44 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
         Assert.Null(SignalCallContext.Principal);
     }
 
+    // ---------- 1.5 D9: per-dispatch credential re-check ----------
+
+    [Fact]
+    public async Task Task15_DeadCredential_RefusedBeforePolicy_TargetNotReached()
+    {
+        var target = new MessageTarget();
+        // isCredentialLive=false ⇒ revoked/expired токен-сесія: та сама відмова, що й default-deny.
+        var client = CreatePair(SignalPrincipal.LoopbackFullAccess, target, isCredentialLive: () => false);
+
+        // sendTextMessage МАЄ політику й пройшов би IDOR (loopback), але мертвий креденшел рубає до неї.
+        await Assert.ThrowsAsync<RemoteMethodNotFoundException>(
+            () => client.InvokeWithParameterObjectAsync<string>("sendTextMessage", new
+            {
+                account = AccountA,
+                recipients = new[] { AccountB },
+                message = "hi",
+            }));
+
+        Assert.False(target.Invoked, "Мертвий креденшел не сміє дійти до адаптера/signal-cli (D9).");
+    }
+
+    [Fact]
+    public async Task Task15_LiveCredential_Passes()
+    {
+        var target = new MessageTarget();
+        var client = CreatePair(SignalPrincipal.LoopbackFullAccess, target, isCredentialLive: () => true);
+
+        var result = await client.InvokeWithParameterObjectAsync<string>("sendTextMessage", new
+        {
+            account = AccountA,
+            recipients = new[] { AccountB },
+            message = "hi",
+        });
+
+        Assert.Equal("sent", result);
+        Assert.True(target.Invoked);
+    }
+
     // ---------- 4.5 D11/S6: malformed recipient ----------
 
     [Fact]
@@ -205,7 +243,8 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
     /// контекст із reflection-фолбеком), таргет реєструється з camelCase-трансформом імен —
     /// як у продакшн-registry.
     /// </summary>
-    private JsonRpc CreatePair(SignalPrincipal principal, object target, string? principalName = null)
+    private JsonRpc CreatePair(
+        SignalPrincipal principal, object target, string? principalName = null, Func<bool>? isCredentialLive = null)
     {
         if (principalName is not null)
             principal = new SignalPrincipal(
@@ -217,7 +256,9 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
         var server = new AuthorizingSignalJsonRpc(
             new HeaderDelimitedMessageHandler(serverStream, serverStream, CreateFormatter()),
             principal,
-            new SignalRpcPolicyRegistry());
+            new SignalRpcPolicyRegistry(),
+            logger: null,
+            isCredentialLive: isCredentialLive);
         server.AddLocalRpcTarget(target, new JsonRpcTargetOptions
         {
             MethodNameTransform = CommonMethodNameTransforms.CamelCase,

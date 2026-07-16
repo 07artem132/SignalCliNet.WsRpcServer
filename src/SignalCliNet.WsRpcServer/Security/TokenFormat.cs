@@ -34,8 +34,8 @@ namespace SignalCliNet.WsRpcServer.Security;
 /// </remarks>
 public static class TokenFormat
 {
-    /// <summary>The fixed token prefix (protocol tag).</summary>
-    private const string Prefix = "ptzh_";
+    /// <summary>The fixed token prefix (protocol tag) — also the subprotocol marker on the handshake.</summary>
+    public const string Prefix = "ptzh_";
 
     /// <summary>Decoded random payload length in bytes (256-bit entropy).</summary>
     private const int PayloadBytes = 32;

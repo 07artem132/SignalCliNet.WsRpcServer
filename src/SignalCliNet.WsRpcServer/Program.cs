@@ -28,7 +28,7 @@ public static class Program
 
                 services.AddSignalEvents();
 
-                services.AddSignalJsonRpc(options =>
+                services.AddSignalJsonRpc(hostContext.Configuration, options =>
                 {
                     var serverSection = hostContext.Configuration.GetSection("Server");
 

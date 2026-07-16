@@ -18,18 +18,29 @@ public sealed class TokenService
     private readonly IDurableStore _store;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<TokenService> _logger;
+    private readonly RevocationBroadcaster? _revocationBroadcaster;
 
     /// <summary>Creates the token service.</summary>
+    /// <param name="pepperProvider">Supplies the versioned HMAC pepper.</param>
+    /// <param name="store">The durable token store (single source of truth).</param>
+    /// <param name="timeProvider">System clock (tests substitute a fixed clock).</param>
+    /// <param name="logger">Logger (never receives plaintext tokens).</param>
+    /// <param name="revocationBroadcaster">
+    /// Optional in-process fan-out used by <see cref="RevokeIdentity"/> to tear down live connections
+    /// (task 1.4). <c>null</c> ⇒ revocation still persists but no live socket is proactively closed.
+    /// </param>
     public TokenService(
         IPepperProvider pepperProvider,
         IDurableStore store,
         TimeProvider timeProvider,
-        ILogger<TokenService> logger)
+        ILogger<TokenService> logger,
+        RevocationBroadcaster? revocationBroadcaster = null)
     {
         _pepperProvider = pepperProvider ?? throw new ArgumentNullException(nameof(pepperProvider));
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _revocationBroadcaster = revocationBroadcaster;
     }
 
     /// <summary>
@@ -91,6 +102,43 @@ public sealed class TokenService
 
         static TokenAuthenticationResult Fail() =>
             new(TokenAuthenticationStatus.Invalid, null, null);
+    }
+
+    /// <summary>
+    /// Cheap liveness re-check of an already-authenticated token by its at-rest hash, WITHOUT recomputing
+    /// the HMAC (the pre-image is gone): live ⇔ the record exists, is not revoked and is not past expiry.
+    /// Used by the per-dispatch credential re-check (D9/task 1.5).
+    /// </summary>
+    /// <param name="tokenHash">The at-rest hash captured at authentication time.</param>
+    /// <returns><c>true</c> if the token is still valid; otherwise <c>false</c>.</returns>
+    public bool IsLive(string tokenHash)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tokenHash);
+
+        var record = _store.GetToken(tokenHash);
+        if (record is null || record.IsRevoked)
+            return false;
+
+        // Живий ⇔ той самий інваріант, що дає Authenticate=Valid (без повторного HMAC): не за межами TTL.
+        return record.ExpiresAt >= _timeProvider.GetUtcNow();
+    }
+
+    /// <summary>
+    /// Revokes ALL of an identity's credentials (access tokens + device secret) atomically in the store
+    /// and then tears down live in-process connections for that identity via the broadcaster (task 1.4).
+    /// </summary>
+    /// <param name="identityId">The identity to revoke.</param>
+    public void RevokeIdentity(string identityId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(identityId);
+
+        // Спершу дюрабл-каскад (revoke виграє над expiry, D7), потім розрив живих конектів in-process.
+        _store.RevokeIdentityCredentials(identityId);
+        _revocationBroadcaster?.Publish(identityId);
+
+        _logger.LogInformation(
+            "Revoked усі креденшели identity {IdentityId} (каскад токен+device-секрет; розрив живих конектів).",
+            identityId);
     }
 
     /// <summary>
