@@ -3,6 +3,7 @@ using System.Buffers.Text;
 using System.Net;
 using System.Net.WebSockets;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
@@ -196,8 +197,12 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
 
         // C4/W11: явний echo ПЕРШОГО не-токен субпротоколу. НІКОЛИ не копіювати весь client-list і
         // НІКОЛИ не echo-ити токен-елемент — інакше WHATWG-клієнт не досягне open (або витік токена).
+        // NetCoreServer 8.0.7 викликає цей hook ПІСЛЯ response.SetBody() (на відміну від master-гілки
+        // апстріму) — голий SetHeader тут дописав би заголовок ПІСЛЯ порожнього рядка, і він витік би
+        // у WebSocket-потік як сміття-кадр (клієнт бачить "reserved bits set"). Тому перебудовуємо
+        // 101-відповідь повністю, з echo-заголовком у правильному місці (перевірено wire-дампом).
         if (firstNonTokenProtocol is not null)
-            response.SetHeader("Sec-WebSocket-Protocol", firstNonTokenProtocol);
+            RebuildUpgradeResponseWithSubprotocol(request, response, firstNonTokenProtocol);
 
         if (tokenCandidate is not null)
         {
@@ -873,6 +878,40 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
     private bool IsOriginAllowed(string origin) =>
         _authOptions.AllowedOrigins is { Length: > 0 } allowed &&
         allowed.Any(o => string.Equals(o, origin, StringComparison.OrdinalIgnoreCase));
+
+    // Перебудовує 101-upgrade-відповідь з нуля, вставляючи Sec-WebSocket-Protocol серед заголовків
+    // (див. коментар у OnWsConnecting: у NetCoreServer 8.0.7 hook викликається після SetBody, тож
+    // додати заголовок «зверху» вже неможливо). Sec-WebSocket-Accept перераховуємо за RFC 6455.
+    private static void RebuildUpgradeResponseWithSubprotocol(
+        HttpRequest request, HttpResponse response, string subprotocol)
+    {
+        string? clientKey = null;
+        var count = request.Headers;
+        for (long i = 0; i < count; i++)
+        {
+            var header = request.Header((int)i);
+            if (string.Equals(header.Item1, "Sec-WebSocket-Key", StringComparison.OrdinalIgnoreCase))
+            {
+                clientKey = header.Item2;
+                break;
+            }
+        }
+
+        // Без ключа NetCoreServer сам відхилив би upgrade раніше — сюди не дійде; guard на всяк випадок.
+        if (string.IsNullOrEmpty(clientKey))
+            return;
+
+        var accept = Convert.ToBase64String(System.Security.Cryptography.SHA1.HashData(
+            Encoding.UTF8.GetBytes(clientKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")));
+
+        response.Clear();
+        response.SetBegin(101);
+        response.SetHeader("Connection", "Upgrade");
+        response.SetHeader("Upgrade", "websocket");
+        response.SetHeader("Sec-WebSocket-Accept", accept);
+        response.SetHeader("Sec-WebSocket-Protocol", subprotocol);
+        response.SetBody();
+    }
 
     // Формує HTTP-відмову ДО апгрейду і надсилає її сам (return false = NetCoreServer нічого не шле),
     // потім розриває сокет. Синхронний SendResponse гарантує, що байти пішли до FIN.
