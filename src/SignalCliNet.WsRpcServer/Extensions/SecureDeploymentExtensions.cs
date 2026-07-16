@@ -1,8 +1,10 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using SignalCliNet.WsRpcServer.Deployment;
+using SignalCliNet.WsRpcServer.Persistence;
 
 namespace SignalCliNet.WsRpcServer.Extensions;
 
@@ -44,7 +46,20 @@ public static class SecureDeploymentExtensions
         // Auto-gen секретів (CA/cert/пеппери) — singleton, викликається зі стартового сервісу.
         services.TryAddSingleton<SecretMaterialProvisioner>();
 
-        // Стартовий сервіс: D4-assertion + G1-lock + провіжн секретів (реєструється ДО RPC-hosted-service).
+        // Durable-стор (SQLite на томі) — один concrete-singleton у двох ролях: стартовий сервіс
+        // тримає concrete (для Initialize: integrity-check + міграції), консюмери — IDurableStore
+        // (тільки дані). ServiceProvider диспоузить його при завершенні хоста.
+        services.TryAddSingleton(sp =>
+        {
+            var dataDirectory = SecureDeploymentHostedService.ResolveDataDirectory(
+                sp.GetRequiredService<IOptions<PersistenceOptions>>().Value.DataDirectory);
+            var databasePath = Path.Combine(dataDirectory, "durable.db");
+            return new DurableStore(databasePath, sp.GetRequiredService<ILogger<DurableStore>>());
+        });
+        services.TryAddSingleton<IDurableStore>(sp => sp.GetRequiredService<DurableStore>());
+
+        // Стартовий сервіс: D4-assertion + G1-lock + провіжн секретів + init durable-стору
+        // (реєструється ДО RPC-hosted-service, тож стартує першим).
         services.AddHostedService<SecureDeploymentHostedService>();
 
         return services;

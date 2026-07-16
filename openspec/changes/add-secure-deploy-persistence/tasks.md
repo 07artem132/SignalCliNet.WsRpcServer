@@ -13,9 +13,9 @@
 - [x] 2.4 BuildKit `--secret` для feed-токена (не в шарах образу)
 
 ## 3. Durable стор
-- [ ] 3.1 Embedded DB (WAL, retry `SQLITE_BUSY`) на томі: identity/token/прив'язки/device-секрети/бюджет
-- [ ] 3.2 Стор `account → owning-identity` + private-флаг (R3.5)
-- [ ] 3.3 G4: backup (шифрований, інший том) + restore-док + `user_version`/migration + integrity-check на старті
+- [x] 3.1 Embedded DB (WAL, retry `SQLITE_BUSY`) на томі: identity/token/прив'язки/device-секрети/бюджет
+- [x] 3.2 Стор `account → owning-identity` + private-флаг (R3.5)
+- [x] 3.3 G4: backup (шифрований, інший том) + restore-док + `user_version`/migration + integrity-check на старті
 
 ## 4. Транспорт
 - [ ] 4.1 Kestrel wss TLS 1.3 (1.2 floor) + HSTS; приватний ключ `0600` на томі

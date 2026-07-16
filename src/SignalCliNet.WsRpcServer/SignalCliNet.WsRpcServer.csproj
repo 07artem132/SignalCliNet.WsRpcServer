@@ -11,6 +11,9 @@
 
     <ItemGroup>
       <PackageReference Include="JSON-RPC.NET" Version="2.7.0" />
+      <!-- Durable-стор (G4/R3.7): embedded SQLite. Microsoft-мейнтейнений провайдер, без відомих CVE;
+           10.0.x у лінії net10. Тягне SQLitePCLRaw.bundle_e_sqlite3 (нативний SQLite) — з nuget.org. -->
+      <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.10" />
       <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.9" />
       <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.9" />
       <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.9" />

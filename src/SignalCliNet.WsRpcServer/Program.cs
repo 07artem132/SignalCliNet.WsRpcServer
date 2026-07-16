@@ -17,16 +17,16 @@ public static class Program
         var host = Host.CreateDefaultBuilder(args)
             .ConfigureServices((hostContext, services) =>
             {
+                // Секюр-деплой/durable-фундамент (G1 lock, D4 fail-closed, auto-gen секретів, стор).
+                // Реєструємо ПЕРШИМ — його hosted-service стартує раніше за signal-cli-демон і RPC-транспорт:
+                // спершу захоплюємо lock на data-dir і валідуємо bind, лише потім хтось торкається тому.
+                services.AddSecureDeployment(hostContext.Configuration);
+
                 var signalSection = hostContext.Configuration.GetSection("SignalCli");
 
                 services.AddSignalCli(options => ApplySignalCliConfig(signalSection, options));
 
                 services.AddSignalEvents();
-
-                // Секюр-деплой/durable-фундамент (G1 lock, D4 fail-closed, auto-gen секретів, стор).
-                // Реєструємо ДО AddSignalJsonRpc, щоб його hosted-service стартував першим (захопив lock
-                // і провалідував bind перед підняттям RPC-транспорту).
-                services.AddSecureDeployment(hostContext.Configuration);
 
                 services.AddSignalJsonRpc(options =>
                 {

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using SignalCliNet.WsRpcServer.Persistence;
 
 namespace SignalCliNet.WsRpcServer.Deployment;
 
@@ -19,6 +20,7 @@ public sealed class SecureDeploymentHostedService(
     IOptions<PersistenceOptions> persistenceOptions,
     IOptions<TransportSecurityOptions> transportOptions,
     SecretMaterialProvisioner secretProvisioner,
+    DurableStore durableStore,
     ILogger<SecureDeploymentHostedService> logger)
     : IHostedService, IDisposable
 {
@@ -30,6 +32,9 @@ public sealed class SecureDeploymentHostedService(
 
     private readonly SecretMaterialProvisioner _secretProvisioner =
         secretProvisioner ?? throw new ArgumentNullException(nameof(secretProvisioner));
+
+    private readonly DurableStore _durableStore =
+        durableStore ?? throw new ArgumentNullException(nameof(durableStore));
 
     private readonly ILogger<SecureDeploymentHostedService> _logger =
         logger ?? throw new ArgumentNullException(nameof(logger));
@@ -60,6 +65,9 @@ public sealed class SecureDeploymentHostedService(
         _logger.LogInformation(
             "Секрети готові на томі (CA/server/admin cert + пеппери); каталог: {SecretsDir}",
             Path.GetDirectoryName(secrets.CaCertificatePath));
+
+        // Durable-стор: відкриття + integrity-check (corrupt → fail-start) + міграції (G4).
+        _durableStore.Initialize();
 
         return Task.CompletedTask;
     }
