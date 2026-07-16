@@ -45,13 +45,30 @@ Signal, відкрити доступ з інтернету через `wss://` 
 ```bash
 cd SignalCliNet.WsRpcServer/deploy
 export GITHUB_USERNAME=<ваш-github-логін>
-export GITHUB_TOKEN=<PAT-зі-скоупом-read:packages>
-docker compose up -d --build
-docker compose logs -f          # очікуйте "WebSocket server started on 0.0.0.0:9000"
+export GITHUB_TOKEN=<PAT-зі-скоупом-read:packages>   # передається як BuildKit secret, не осідає у шарах
+DOCKER_BUILDKIT=1 docker compose up -d --build
+docker compose logs -f wsrpcserver     # очікуйте лог провіжну секретів + "server started"
 ```
 
-Контейнер слухає `127.0.0.1:9000` і зберігає стан акаунта у volume
-`signalcli-data` (це і є привʼязаний пристрій — бекапте його).
+`docker compose` піднімає **два** сервіси: `wsrpcserver` (НЕ публікується на хост — досяжний лише
+всередині compose-мережі) і `reverse-proxy` (nginx), що термінує **`wss://127.0.0.1:9443`**
+авто-згенерованим internal-CA сертифікатом із тому. На першому старті сервер сам генерує на волюмі
+CA + server-cert + admin-cert + пеппери (`0600`, persist-once) — жодних секрет-env не потрібно.
+
+Стан акаунта + durable-стор (`durable.db`) + секрети (`secrets/`) лежать на volume `signalcli-data`.
+**Монтуйте його на платформно-шифрований том** (R3.7/S2): at-rest шифрування — відповідальність
+платформи (KMS-disk / host dm-crypt), НЕ застосунку (app-LUKS у контейнері вимагав би `--privileged`
+— гірша безпека). Це і є привʼязаний пристрій — бекапте його (§6).
+
+> ⚠️ **Клієнт має довіряти internal-CA.** Витягніть його й додайте у trust-store клієнта/системи:
+> ```bash
+> docker compose exec reverse-proxy cat /data/secrets/ca.crt > wsrpc-ca.crt
+> ```
+> «Голий IP без CA» не підтримується — TLS без довіри до CA браузер/розширення не валідує.
+> За наявності **домену** використовуйте ACME замість internal-CA (§4).
+
+> 🔒 **G1 (single-instance).** Рівно одна репліка на data-dir: другий процес на тому ж томі
+> **не стартує** (exclusive lockfile). НЕ використовуйте `--scale`/`replicas>1`.
 
 ### Альтернатива: збірка залежностей із вихідного коду (без feed/токена)
 
@@ -123,25 +140,35 @@ SignalCli__JavaExecutable=/opt/jdk25/bin/java dotnet SignalCliNet.WsRpcServer.dl
 
 ## 4. Відкриття доступу з інтернету (TLS / wss)
 
-**Не виставляйте порт 9000 голим у мережу.** Сервер не має власної
-автентифікації — будь-хто, хто дотягнеться до сокета, зможе слати повідомлення
-від вашого акаунта. Тримайте 9000 на `127.0.0.1` і ставте перед ним reverse
-proxy з TLS.
+**Ніколи не виставляйте порт 9000 (голий `ws`) у мережу.** Сервер не має власної автентифікації
+у Фазі 1 (D4 fail-closed відмовить у не-loopback bind без свідомого opt-in). TLS термінується
+reverse-proxy; app лишається за ним.
 
-1. Домен → A-запис на IP VPS.
-2. Сертифікат: `certbot --nginx -d signal-rpc.example.com`.
-3. Конфіг nginx — див. [`nginx-wss.conf.example`](nginx-wss.conf.example)
-   (проксі WebSocket-upgrade на `127.0.0.1:9000`).
-4. Firewall: відкрийте лише 443 (і 22), порт 9000 — ні.
+### Два шляхи довіри (D3)
 
-### Захист каналу (обовʼязково)
+| Ситуація | Сертифікат | Клієнтський trust |
+|---|---|---|
+| **Є домен** | ACME/Let's Encrypt: `certbot --nginx -d signal-rpc.example.com` + [`nginx-wss.conf.example`](nginx-wss.conf.example) | публічний CA — нічого робити не треба |
+| **Немає домену** | авто-згенерований **internal-CA** (bundled reverse-proxy, [`nginx-wss-autocert.conf`](nginx-wss-autocert.conf)) | додати `ca.crt` у trust-store клієнта |
+| **Голий IP без CA** | — | **не підтримується** (браузер/розширення не валідує TLS без довіреного CA) |
 
-Оскільки в самому RPC автентифікації немає, додайте один із рівнів:
+Обидва reverse-proxy-конфіги мають **TLS 1.3 з підлогою 1.2** (старіші протоколи вимкнено) + HSTS.
 
-- **HTTP Basic auth** на `location /` у nginx (`auth_basic` + `htpasswd`) — і
-  передавайте креденшали у Потужності в URL `wss://user:pass@host`; **або**
-- **allowlist за IP** (`allow`/`deny`), якщо у клієнтів статичні адреси; **або**
-- доступ лише через **VPN/WireGuard** до приватної мережі.
+### L4-передумова публічної експозиції (D5/U1)
+
+Оскільки app-шар не має auth у Фазі 1, публічний біндинг вимагає **зовнішнього L4-фаєрволу** як
+передумови (це не app-робота — accepted-risk, виноситься на мережу):
+
+- **nftables**/**iptables** на VPS: пускати `443`/`9443` лише з довірених джерел, `22` — за потреби;
+- або **cloud Security Group** (AWS SG / GCP firewall) з тим самим allowlist;
+- або доступ лише через **VPN/WireGuard** до приватної мережі.
+
+Порт app-контейнера (`9000`) не публікується на хост зовсім — лише reverse-proxy слухає `9443`.
+
+### Додатковий захист каналу (опційно, поки немає auth)
+
+- **HTTP Basic auth** на `location /` у nginx (`auth_basic` + `htpasswd`), креденшали в URL
+  `wss://user:pass@host`; **або** **allowlist за IP** (`allow`/`deny`) у nginx.
 
 ---
 
@@ -173,12 +200,40 @@ JSON-RPC 2.0. Основні методи (усі — camelCase):
 
 ## 6. Експлуатація
 
-- **Бекап:** volume `signalcli-data` = привʼязаний пристрій. Втрата → повторна
-  привʼязка з телефона.
-- **Оновлення:** `docker compose up -d --build` (стан в volume зберігається).
+- **Оновлення (свідоме downtime-вікно, W15):** через G1 (single-instance) деплой = зупинка старого
+  контейнера й запуск нового, а не rolling-update. `docker compose up -d --build` робить саме це;
+  НЕ піднімайте другий екземпляр на тому ж томі паралельно (він refuse-start).
+- **`replicas=1` — hard-constraint:** не масштабуйте. Durable-стор і бюджет — єдина копія на томі.
 - **Health-check:** сервер сам перезапускає signal-cli при збоях
   (`SignalCli:MaxRestartAttempts`, `HealthCheckIntervalSeconds`).
-- **Логи:** `docker compose logs -f`. Рівень — `Logging:LogLevel:Default`.
+- **Логи:** `docker compose logs -f`. Рівень — `Logging:LogLevel:Default`. Секрети/тіла/номери у
+  логи не пишуться (privacy-контракт).
+- **Core dumps вимкнено (D17):** compose ставить `ulimits.core: 0` (bare-metal/systemd —
+  `LimitCORE=0` або `ulimit -c 0` для сервіс-юзера), щоб дамп не виніс ключі/пеппери на
+  (можливо незашифрований) шлях.
+
+### Бекап і відновлення durable-стану (G4)
+
+Том `signalcli-data` містить і привʼязаний пристрій (signal-cli state), і durable-стор (`durable.db`),
+і секрети (`secrets/`). Втрата тому = повторна привʼязка з телефона + втрата identity/binding-стану.
+
+**Бекап** (пишіть на ОКРЕМИЙ платформно-шифрований том/сховище, не на той самий диск):
+
+```bash
+# 1. Консистентний онлайн-знімок SQLite (безпечно на живому сервері, WAL-сумісно):
+docker compose exec wsrpcserver \
+  sqlite3 /data/durable.db ".backup '/data/durable.backup.db'"
+# 2. Винесіть знімок + секрети на окреме шифроване сховище:
+docker compose cp wsrpcserver:/data/durable.backup.db ./backup/durable.$(date +%F).db
+docker run --rm -v deploy_signalcli-data:/v -v "$PWD/backup":/b alpine \
+  sh -c 'cp -a /v/secrets /b/secrets && tar czf /b/signalcli-state.tgz -C /v SignalCliStorageData'
+```
+
+**Відновлення:** зупиніть сервіс → покладіть `durable.<date>.db` назад як `/data/durable.db` (і
+`secrets/` + `SignalCliStorageData`) на новому томі → підніміть сервіс. На старті виконається
+`integrity_check` (пошкоджена БД → **відмова старту** з чітким логом) і міграції схеми
+(`PRAGMA user_version`) — тобто відновлений/старіший знімок автоматично домігрується до поточної
+версії.
 
 ---
 

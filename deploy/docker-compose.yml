@@ -2,6 +2,11 @@
 # Export GITHUB_USERNAME and GITHUB_TOKEN (PAT with read:packages) first, then
 # run from SignalCliNet.WsRpcServer/deploy:  docker compose up -d --build
 #
+# Топологія: app (wsrpcserver) НЕ публікується на хост — досяжний лише всередині compose-мережі.
+# reverse-proxy (nginx) термінує wss АВТО-згенерованим internal-CA сертифікатом із тому і публікує
+# wss://127.0.0.1:9443. Клієнти довіряють /data/secrets/ca.crt. Для інтернет-експозиції — L4-фаєрвол
+# (nftables/cloud SG) як передумова та/або ACME-домен (див. deploy/DEPLOYMENT.md §4).
+#
 # For the offline / from-source build instead, point dockerfile at
 # Dockerfile.from-source and set context to the parent of the three repos.
 services:
@@ -27,16 +32,16 @@ services:
     # (можливо незашифрований) шлях. Еквівалент `ulimit -c 0` / systemd `LimitCORE=0`.
     ulimits:
       core: 0
-    ports:
-      # Host:Container. Прив'язка до 127.0.0.1 на хості + термінація TLS у reverse-proxy
-      # (див. nginx-wss.conf.example / DEPLOYMENT.md §4), а не голий 9000 в інтернет.
-      - "127.0.0.1:9000:9000"
+    # Порт 9000 НЕ публікуємо на хост — app досяжний лише всередині compose-мережі (для proxy).
+    # Клієнти підключаються через wss на reverse-proxy (9443), а не до голого ws.
+    expose:
+      - "9000"
     environment:
-      # Docker пробрасывает трафік на 0.0.0.0 контейнера, тож app МУСИТЬ біндити 0.0.0.0.
+      # Docker пробрасує трафік на 0.0.0.0 контейнера, тож app МУСИТЬ біндити 0.0.0.0.
       Server__Host: "0.0.0.0"
       Server__Port: "9000"
       # D4 (fail-closed): не-loopback bind дозволений лише зі свідомим opt-in оператора + TLS попереду.
-      # Тут це безпечно, бо порт опублікований лише на 127.0.0.1 хоста, а TLS термінується reverse-proxy.
+      # Тут безпечно: порт не публікується на хост, а TLS термінується reverse-proxy у тій же мережі.
       Server__AllowNonLoopback: "true"
       Server__Tls__Enabled: "true"
       # Durable-стан (lockfile, SQLite-стор, авто-згенеровані секрети) — на змонтованому томі.
@@ -48,6 +53,30 @@ services:
       # Linked-account keys + signal-cli state + durable-стор + секрети. Keep this volume safe — it
       # IS the linked device (втрата = повторна прив'язка з телефона). Монтуйте на ENCRYPTED-том.
       - signalcli-data:/data
+    healthcheck:
+      # Готовність = секрети провіжнено (app пройшов стартовий сервіс: lock → секрети → стор).
+      # reverse-proxy стартує лише після цього (йому потрібен server.crt на томі).
+      test: ["CMD-SHELL", "test -f /data/secrets/server.crt"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+
+  reverse-proxy:
+    image: nginx:1.27-alpine
+    container_name: wsrpcserver-proxy
+    restart: unless-stopped
+    depends_on:
+      wsrpcserver:
+        condition: service_healthy
+    ports:
+      # wss на хост-loopback. Для інтернет-експозиції: L4-фаєрвол (nftables/cloud SG) як передумова
+      # (D5/U1) + за наявності домену ACME замість internal-CA (D3) — див. DEPLOYMENT.md §4.
+      - "127.0.0.1:9443:9443"
+    volumes:
+      # RO-доступ до тому заради server.crt/key (приватний ключ 0600 — nginx-master читає як root).
+      - signalcli-data:/data:ro
+      - ./nginx-wss-autocert.conf:/etc/nginx/conf.d/default.conf:ro
 
 volumes:
   signalcli-data:

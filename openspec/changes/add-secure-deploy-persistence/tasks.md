@@ -18,9 +18,9 @@
 - [x] 3.3 G4: backup (шифрований, інший том) + restore-док + `user_version`/migration + integrity-check на старті
 
 ## 4. Транспорт
-- [ ] 4.1 Kestrel wss TLS 1.3 (1.2 floor) + HSTS; приватний ключ `0600` на томі
-- [ ] 4.2 D5/U1: L4-передумова публічного біндингу задокументована (nftables/SG)
-- [ ] 4.3 D3-trust docs: ACME / internal-CA trust-store; «голий IP без CA» не підтримується
+- [x] 4.1 Kestrel wss TLS 1.3 (1.2 floor) + HSTS; приватний ключ `0600` на томі
+- [x] 4.2 D5/U1: L4-передумова публічного біндингу задокументована (nftables/SG)
+- [x] 4.3 D3-trust docs: ACME / internal-CA trust-store; «голий IP без CA» не підтримується
 
 ## 5. Тести (DoD)
 - [ ] 5.1 Другий процес на тому ж data-dir → refuse-start (G1)
