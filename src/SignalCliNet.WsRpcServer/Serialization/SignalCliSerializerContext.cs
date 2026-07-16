@@ -18,6 +18,8 @@ namespace SignalCliNet.WsRpcServer.Serialization;
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     WriteIndented = false)]
 [JsonSerializable(typeof(RpcNotification))]
+[JsonSerializable(typeof(HandshakeResponse))]
+[JsonSerializable(typeof(ApiVersionRequirement))]
 [JsonSerializable(typeof(ListAccountsResponse))]
 [JsonSerializable(typeof(SyncAccountsResponse))]
 [JsonSerializable(typeof(StartLinkResponse))]

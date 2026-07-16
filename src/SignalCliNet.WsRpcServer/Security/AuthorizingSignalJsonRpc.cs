@@ -77,7 +77,12 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
         }
         catch (RpcErrorException ex)
         {
-            return Error(request, ex.ErrorCode, ex.Message);
+            // Санітизація (3.1): generic клієнту, деталі — в лог; той самий шлях, що й для помилок диспетчу.
+            return new JsonRpcError
+            {
+                RequestId = request.RequestId,
+                Error = RpcErrorSanitizer.CreateDetail(ex, method, _logger),
+            };
         }
 
         // 3. Диспетч цільового методу; principal публікуємо в call-context на час виклику (V8).
@@ -148,6 +153,15 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
             _ => [],
         };
     }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Санітизація (3.1): усі помилки диспетчу (виняток адаптера тощо) проходять тут — замість дефолтної
+    /// StreamJsonRpc-обгортки з <c>CommonErrorData</c> (стек клієнту) віддаємо generic-деталь, повний
+    /// виняток логуючи на сервері.
+    /// </remarks>
+    protected override JsonRpcError.ErrorDetail CreateErrorDetails(JsonRpcRequest request, Exception exception) =>
+        RpcErrorSanitizer.CreateDetail(exception, request?.Method, _logger);
 
     // Детермінований JSON-RPC error із заданими кодом/повідомленням (повне керування, без CommonErrorData).
     private static JsonRpcError Error(JsonRpcRequest request, JsonRpcErrorCode code, string message) => new()

@@ -2,6 +2,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using SignalCliNet.WsRpcServer.Security;
 using WsRpcServer.Core;
 using WsRpcServer.Events;
 
@@ -10,6 +11,7 @@ namespace SignalCliNet.WsRpcServer.Services;
 public class SignalRpcHostedService(
     IServiceProvider serviceProvider,
     IEventProcessor eventProcessor,
+    IRpcPolicyRegistry policyRegistry,
     ILogger<SignalRpcHostedService> logger,
     JsonRpcServerConfig config)
     : IHostedService, IDisposable
@@ -25,9 +27,16 @@ public class SignalRpcHostedService(
     private readonly IEventProcessor _eventProcessor =
         eventProcessor ?? throw new ArgumentNullException(nameof(eventProcessor));
 
+    private readonly IRpcPolicyRegistry _policyRegistry =
+        policyRegistry ?? throw new ArgumentNullException(nameof(policyRegistry));
+
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         _logger.LogInformation("Starting Signal JSON-RPC WebSocket server...");
+
+        // W23: гучний фейл старту, якщо якийсь дискаверабельний RPC-метод не має явної політики
+        // (dispatch-time default-deny лишається первинним; це belt-and-suspenders на старті/у CI).
+        RpcPolicyCoverageValidator.ValidateCoverage(_policyRegistry);
 
         await _eventProcessor.StartAsync(cancellationToken);
 

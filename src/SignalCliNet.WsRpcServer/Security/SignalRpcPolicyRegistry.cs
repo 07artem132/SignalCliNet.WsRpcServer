@@ -20,6 +20,8 @@ public sealed class SignalRpcPolicyRegistry : IRpcPolicyRegistry
     [
         // --- Public: неавтентифіковано, без стану, без PII ---
         new() { Method = "ping", Kind = RpcPolicyKind.Public },
+        // handshake — negotiation версії/можливостей контракту (A5); має бути доступним до auth.
+        new() { Method = "handshake", Kind = RpcPolicyKind.Public },
 
         // --- IdentityOnboarding: виконується ДО існування акаунта (лінкування пристрою) ---
         new() { Method = "startLink", Kind = RpcPolicyKind.IdentityOnboarding },
