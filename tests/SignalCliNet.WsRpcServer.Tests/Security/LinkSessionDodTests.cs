@@ -64,7 +64,8 @@ public sealed class LinkSessionDodTests : IAsyncLifetime
             .Setup(d => d.StartLinkAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new StartLinkResponse(LinkUri));
         _devicesMock
-            .Setup(d => d.FinishLinkAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Setup(d => d.FinishLinkAsync(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<TimeSpan?>()))
             .Returns(() =>
             {
                 Interlocked.Increment(ref _finishLinkCalls);

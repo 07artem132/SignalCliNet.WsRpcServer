@@ -471,8 +471,9 @@ public sealed class AdmissionDodTests : IDisposable
     {
         var buffer = new byte[128 * 1024];
         var result = await ws.ReceiveAsync(buffer, Cts(30).Token);
-        // Pre-auth кадри сесія шле Text-ом, а StreamJsonRpc-трафік WebSocketMessageHandler фреймворку
-        // шле Binary-кадрами (SendBinaryDataAsync) — приймаємо обидва, як реальний WHATWG-клієнт.
+        // Pre-auth кадри сесія шле Text-ом; StreamJsonRpc-трафік WebSocketMessageHandler фреймворку тепер
+        // теж шле Text-кадрами (UseTextFramesForOutgoingMessages=true, JSON-RPC.NET 2.8.0, browser interop)
+        // — приймаємо будь-який не-Close тип, як реальний WHATWG-клієнт.
         Assert.NotEqual(WebSocketMessageType.Close, result.MessageType);
         return JsonDocument.Parse(new ReadOnlyMemory<byte>(buffer, 0, result.Count).ToArray());
     }

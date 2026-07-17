@@ -65,6 +65,11 @@ public static class Program
         // кадрів; менша стеля обмежує пам'ять на кадр. Задається у appsettings.json / Docker env.
         if (int.TryParse(serverSection["MaxMessageSizeBytes"], out var maxMessageSize))
             options.MaxMessageSizeBytes = maxMessageSize;
+
+        // Browser interop (JSON-RPC.NET 2.8.0): WHATWG-браузерні WS-клієнти очікують ТЕКСТОВИЙ кадр
+        // (event.data = string, а не Blob). Framework-дефолт — Binary; цей app обслуговує браузерні
+        // клієнти, тож вмикаємо Text для вихідних JSON-RPC кадрів. Не-браузерні споживачі приймають обидва.
+        options.UseTextFramesForOutgoingMessages = true;
     }
 
     /// <summary>

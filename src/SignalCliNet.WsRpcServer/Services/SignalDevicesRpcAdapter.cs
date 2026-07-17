@@ -45,6 +45,14 @@ public sealed class SignalDevicesRpcAdapter(
     /// </summary>
     public const int LinkSessionInvalidCode = -32004;
 
+    /// <summary>
+    /// Per-call таймаут (секунди) для <c>finishLink</c> — дефолт 130 (TTL link-сесії 120с + 10с запас).
+    /// Прокидається у <see cref="ISignalDevices.FinishLinkAsync"/> як <c>timeout</c>, щоб ручний скан QR
+    /// ≤120с не був убитий глобальним 30с RPC-таймаутом send-шляху (W9: per-call ≥130 замість глобального
+    /// bump). Глобальний <c>SignalCli:RequestTimeoutSeconds</c> лишається дефолтним і не чіпається.
+    /// </summary>
+    public const int FinishLinkTimeoutSeconds = 130;
+
     // Generic, PII-free повідомлення для невалідної сесії (однакове для unknown/foreign/expired).
     private const string LinkSessionInvalidMessage = "Link session is invalid or has expired.";
 
@@ -139,7 +147,11 @@ public sealed class SignalDevicesRpcAdapter(
         try
         {
             // Клієнт передав лише sessionId; справжній URI беремо із сесії. Redact: URI не логуємо.
-            response = await _signalDevices.FinishLinkAsync(session.DeviceLinkUri, deviceName, cancellationToken)
+            // W9: per-call timeout ≥130с (TTL сесії 120с + запас) — SignalCli.NET 4.10.2 додав per-call
+            // seam, тож ручний скан ≤120с більше не вбивається глобальним 30с RPC-таймаутом send-шляху.
+            response = await _signalDevices.FinishLinkAsync(
+                    session.DeviceLinkUri, deviceName, cancellationToken,
+                    TimeSpan.FromSeconds(FinishLinkTimeoutSeconds))
                 .ConfigureAwait(false);
         }
         catch (RpcErrorException)
