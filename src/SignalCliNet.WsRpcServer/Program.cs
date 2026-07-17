@@ -25,7 +25,12 @@ public static class Program
 
                 var signalSection = hostContext.Configuration.GetSection("SignalCli");
 
-                services.AddSignalCli(options => ApplySignalCliConfig(signalSection, options));
+                // R3.1 (add-group-claim-receive): безперервний авто-receive лише коли GroupClaim увімкнено —
+                // це скасовує send-only передумову V2 і потрібне, щоб сканер матчив claim-коди у вхідному потоці.
+                var groupClaimEnabled =
+                    hostContext.Configuration.GetValue<bool>("Server:GroupClaim:Enabled");
+
+                services.AddSignalCli(options => ApplySignalCliConfig(signalSection, options, groupClaimEnabled));
 
                 services.AddSignalEvents();
 
@@ -76,8 +81,16 @@ public static class Program
     /// Maps the "SignalCli" configuration section onto <see cref="SignalCli.Models.SignalCliOptions"/>.
     /// Extracted from the host-builder lambda so the key passthrough is unit-testable.
     /// </summary>
+    /// <param name="signalSection">The "SignalCli" configuration section.</param>
+    /// <param name="options">The signal-cli options to populate.</param>
+    /// <param name="continuousReceive">
+    /// When <c>true</c> (gated by <c>Server:GroupClaim:Enabled</c>, R3.1), starts the daemon in continuous
+    /// auto-receive (<c>UseManualReceiveMode=false</c>) so the group-claim scanner sees incoming group chats.
+    /// Default <c>false</c> keeps the library default (manual, send-only) — current behaviour unchanged.
+    /// </param>
     public static void ApplySignalCliConfig(
-        IConfigurationSection signalSection, SignalCli.Models.SignalCliOptions options)
+        IConfigurationSection signalSection, SignalCli.Models.SignalCliOptions options,
+        bool continuousReceive = false)
     {
         options.LibDirectory = signalSection["LibDirectory"] ?? "signal-cli/lib";
 
@@ -107,5 +120,10 @@ public static class Program
         // (D16+W9: TTL link-сесії 120с; per-call timeout — питання до upstream).
         if (int.TryParse(signalSection["RequestTimeoutSeconds"], out var requestTimeout))
             options.RequestTimeoutSeconds = requestTimeout;
+
+        // R3.1: авто-receive лише за прапорцем GroupClaim. Інакше лишаємо бібліотечний дефолт
+        // (UseManualReceiveMode=true — send-only), тобто демон не ресивить за всі акаунти (Фаза-1 поведінка).
+        if (continuousReceive)
+            options.UseManualReceiveMode = false;
     }
 }

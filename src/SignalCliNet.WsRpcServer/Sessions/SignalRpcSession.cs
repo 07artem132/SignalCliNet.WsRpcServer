@@ -63,6 +63,11 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
     private readonly AdmissionOptions _admissionOptions;
     private readonly TimeProvider _timeProvider;
 
+    // Group-claim send-gate (add-group-claim-receive). Активний лише коли GroupClaim:Enabled (сам gate
+    // гейтить прапорцем); передається у chokepoint, який нулить його, якщо фіча вимкнена. Опційний:
+    // мінімальні DI-провайдери (деякі DoD-тести без AddGroupClaimCore) → null (gate неактивний).
+    private readonly GroupSendGate? _groupSendGate;
+
     private int _identitySlotHeld;              // 0/1 — тримаємо per-identity conn-слот (release рівно раз)
     private MessageRateLimiter? _msgRateLimiter; // per-connection token-bucket (msg-rate); null коли вимкнено
     private Timer? _idleTimer;                   // idle-timeout таймер (переармовується на кожен data-кадр)
@@ -113,7 +118,8 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
         IdentityConnectionLimiter identityConnLimiter,
         SignalCliGate signalCliGate,
         IOptions<AdmissionOptions> admissionOptions,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        GroupSendGate? groupSendGate = null)
         : base(server, logger, config)
     {
         _eventProcessor = eventProcessor ?? throw new ArgumentNullException(nameof(eventProcessor));
@@ -131,6 +137,7 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
         _signalCliGate = signalCliGate ?? throw new ArgumentNullException(nameof(signalCliGate));
         _admissionOptions = (admissionOptions ?? throw new ArgumentNullException(nameof(admissionOptions))).Value;
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+        _groupSendGate = groupSendGate;   // опційний (null у мінімальних DI-провайдерах)
 
         _authMachine = new SessionAuthStateMachine(_authOptions.Enabled);
 
@@ -355,8 +362,10 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
             // V9: pre-dispatch chokepoint замість голого JsonRpc — кожен виклик проходить герметичний
             // default-deny + IDOR-guard + санітизацію помилок. Principal сесії читається per-invocation.
             // admitSends/gate/maxInFlight — send-admission (W16) + G6-гейт + in-flight cap (лише коли увімкнено).
+            // groupSendGate — claim-гейт групових send'ів (сам нулиться в chokepoint, якщо GroupClaim вимкнено).
             JsonRpc = new AuthorizingSignalJsonRpc(
-                _messageHandler, principal, _policyRegistry, Logger, isCredentialLive, admitSends, gate, maxInFlight);
+                _messageHandler, principal, _policyRegistry, Logger, isCredentialLive, admitSends, gate, maxInFlight,
+                _groupSendGate);
 
             // Configure JSON-RPC
             JsonRpc.CancelLocallyInvokedMethodsWhenConnectionIsClosed = true;
@@ -565,7 +574,9 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
             isAdmin: string.Equals(identity.Role, "admin", StringComparison.Ordinal),
             hasFullAccess: false,
             allowedAccounts: identity.LinkedAccounts,
-            allowedGroupIds: []);
+            // R3.2: видимість груп = активні group-claim binding-и identity (add-group-claim-receive).
+            // Коли claim вимкнено — binding-таблиця порожня → allowedGroupIds порожній (поведінка незмінна).
+            allowedGroupIds: ActiveGroupBindingIds(identity.Id));
 
         // Підписка на in-process revoke: revoke identity → close 4401 `revoked` живого конекту (1.4).
         _revocationSubscription = _revocationBroadcaster.Subscribe(identity.Id, OnIdentityRevoked);
@@ -583,6 +594,17 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
     {
         var secret = _store.GetDeviceSecret(identityId);
         return secret is not null && !secret.IsRevoked;
+    }
+
+    // Group-id-и активних (не revoked, не прострочених) claim-binding-ів identity — видимість груп для
+    // listGroups-фільтра (R3.2). Порожньо, коли group-claim вимкнено (нема binding-ів).
+    private string[] ActiveGroupBindingIds(string identityId)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return _store.GetGroupBindingsForIdentity(identityId)
+            .Where(b => !b.Revoked && b.ExpiresAt > now)
+            .Select(b => b.GroupId)
+            .ToArray();
     }
 
     /// <summary>

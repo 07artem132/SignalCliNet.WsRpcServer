@@ -96,3 +96,64 @@ Abuse-лог сам по собі **не** tamper-evident: без hash-chain з�
 + міграція `audit_log` v5). Для security-подій, де потрібна доказовість у ворожому середовищі, покладайся
 на audit-trail (hash-chain), а не на abuse-лог. Abuse-лог лишається окремим операційним сигналом для
 обсяг-контролю.
+
+## Group-claim: авторизація на рівні (identity, group) (зміна `add-group-claim-receive`)
+
+Апгрейд W17 для груп: замість «бот = відкрите реле» для груп-таргету, send у групу через спільного бота
+вимагає **claim** — авторизацію на рівні `(identity, group)`, а не лише account. **Уся фіча gated**
+`Server:GroupClaim:Enabled` (дефолт `false` — поведінка незмінна: нема авто-receive, нема сканера,
+send-gate неактивний).
+
+### Потік claim (T2/T3)
+
+1. Юзер `U` додає бота в групу `G` і кличе **`requestGroupClaim()`** — **без аргументу-групи** (T3:
+   group-ID нізвідки взяти до claim'у; `listGroups` її не покаже). Повертається one-time **код**
+   (≥96-bit CSPRNG, візуальні блоки як інвайти; TTL ~10 хв), bound лише до `(identity U)`. Rate-limit +
+   per-identity quota на активні bindings (footprint-контроль, D2).
+2. `U` вписує код у чат `G`. Демон receive-ить (безперервний авто-receive, R3.1); **сканер** матчить код
+   у вхідному потоці й робить **атомарний consume-and-bind** (`UPDATE…WHERE consumed=0`, W20).
+3. **Групу і anchor фіксує сканер:** binding = `(identity U, group G-де-з'явився-код, anchorAci =
+   ACI вставника коду)`. `anchorAci` — ACI (не E.164): менше PII у сторі.
+
+### Anchor-модель (T2): валідність binding при зміні членства
+
+`identity` сама по собі не має Signal-ідентифікатора, тож «членство identity в G» неперевірюване. Тому
+binding несе **anchorAci** — ACI того, хто вставив код. Перед **КОЖНИМ** send через бот перевіряється
+`anchorAci ∈ members(G)` (primary) + TTL binding'у (backstop). Anchor вийшов/вигнаний із G, або бота
+прибрали з G → **send-відмова (`-32007`) + інвалідизація binding'у** (`revoked=1`). Це закриває
+«ex-member шле в G безстроково». Member-list кешується коротким TTL (~60с) з fail-closed на транзієнт
+(не вдалося визначити членство → відмова send без інвалідизації binding'у).
+
+### Delegation-by-proxy — accepted-risk із чесною семантикою (T2)
+
+Код секретний до `U`, one-time, TTL ~10 хв. Вставлення коду **будь-ким** активує binding **самого `U`**
+(не грантить прав вставнику), але **anchor = вставник** → право `U` живе, **поки поручитель-вставник
+лишається членом G**. Privilege-escalation немає; griefing-burn коду → re-request працює. Residual T3
+(«чужий код вставили в іншу групу») дешевий: binding дає права лише `U`; `U` бачить свої bindings
+(**`listMyBindings`**, лише власні) і відкликає зайві (**`revokeMyBinding`**); quota обмежує кількість.
+
+### Per-account receive-роутер (S11) та ізоляція (R3.5/W25)
+
+Сирий notification-потік демона проходить через **єдиний per-account роутер** (`account →
+owning-identity`), який фанаутить:
+
+- **own-linked** акаунт (приватний binding, `IsPrivate=true` — власний номер, R3.5) → **лише власнику**
+  (його subscription-клієнтам); жоден consumer іншої identity (ні сканер, ні events) його не бачить;
+- **shared-bot** акаунт (admin-owned `IsPrivate=false` АБО без binding) → **лише сканеру**.
+
+Будь-який майбутній receive/event-consumer підписується **ЧЕРЕЗ роутер**, не на сирий потік — інваріант
+R3.5/W25-inbound тримає **механізм**, а не «поверхні ще нема».
+
+**W25 — accepted-risk (daemon-internal cross-account).** Спільний signal-cli демон може змішувати
+crossaccount-стан на рівні самого демона (contact-merge, profile-key sync) — цього app-фільтр не бачить.
+App-ізоляція тримає межу на **поверхні** (RPC/receive), daemon-internal leak — **відомий residual**. Тому
+**лінкувати власний номер у спільний демон не рекомендується**: якщо потрібна сувора приватність власного
+номера — окремий демон/інстанс, не спільний бот.
+
+### Privacy при receive (scan-and-drop)
+
+Сканер працює в режимі **скан-і-викинь**: тіла повідомлень, номери та вкладення вхідних **НІКОЛИ** не
+логуються й не зберігаються. У сторі осідають лише `code_hash` (claim), `group_id` та `anchor_aci`
+(binding) — жодного тіла/номера. Сканер — **окремий non-blocking споживач** (bounded-channel, drop-oldest)
+поза гарячим RPC-шляхом: повільний скан не блокує RPC-відповіді (head-of-line спільного stdout-loop,
+Уточнення-3).

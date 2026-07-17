@@ -48,6 +48,11 @@ namespace SignalCliNet.WsRpcServer.Serialization;
 // add-invites-admin (секція 2): non-secret admin-відповідь. CreateInviteResponse НЕ реєструємо тут —
 // вона несе плейнтекст-код (A1, reflection-fallback, як RedeemInviteResponse).
 [JsonSerializable(typeof(RevokeIdentityResponse))]
+// add-group-claim-receive (секція 2): non-secret group-claim відповіді. GroupClaimResponse НЕ реєструємо —
+// вона несе плейнтекст-код (A1, reflection-fallback, як CreateInviteResponse).
+[JsonSerializable(typeof(ListBindingsResponse))]
+[JsonSerializable(typeof(GroupBindingInfo))]
+[JsonSerializable(typeof(RevokeBindingResponse))]
 public partial class SignalCliSerializerContext : JsonSerializerContext
 {
 }

@@ -58,6 +58,11 @@ public static class SignalRpcExtensions
         // AbuseLogService (нижче) має домен-розділений pepper_abuse незалежно від Admission:Enabled.
         services.AddAdmissionCore(configuration);
 
+        // Group-claim receive-core (add-group-claim-receive): claim-сервіс + confirm-seam, member-cache,
+        // send-gate, per-account роутер (S11) і shared-bot сканер. Опт-ін (Server:GroupClaim:Enabled=false
+        // default) — усе passthrough/no-op поки вимкнено. Спирається на той самий durable-стор.
+        services.AddGroupClaimCore(configuration);
+
         // Онбординг/інвайти (add-invites-admin): InviteService (mint/redeem), AbuseLogService (shared-bot
         // audit, W24) і soft global rate-cap редемпшну (task 1.2) — singletons (стан/лічильники живуть на
         // весь процес). TimeProvider/IDurableStore/IAbusePepperProvider беруться з AddAuthnCore/AddAdmissionCore.
@@ -81,6 +86,7 @@ public static class SignalRpcExtensions
         services.AddScoped<ISignalGroupsRpc, SignalGroupsRpcAdapter>();
         services.AddScoped<ISignalOnboardingRpc, SignalOnboardingRpcAdapter>();
         services.AddScoped<ISignalAdminRpc, SignalAdminRpcAdapter>();
+        services.AddScoped<ISignalGroupClaimRpc, SignalGroupClaimRpcAdapter>();
         services.AddScoped<ISystemRpc, SystemRpcAdapter>();
 
         // Server hosted service (плейн token-порт)

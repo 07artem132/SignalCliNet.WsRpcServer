@@ -34,6 +34,7 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
     private readonly Func<IReadOnlyList<string>, AdmissionDecision>? _admitSends;
     private readonly SignalCliGate? _signalCliGate;
     private readonly int _maxInFlight;
+    private readonly GroupSendGate? _groupSendGate;
 
     // Per-connection лічильник in-flight RPC (D12). Interlocked inc на вході dispatch / dec у finally.
     private int _inFlight;
@@ -67,6 +68,13 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
     /// methods. <c>0</c> (admission disabled) means no cap. Exceeding it refuses immediately with
     /// <c>-32005</c> (<c>retry_after=1</c>) — no queue.
     /// </param>
+    /// <param name="groupSendGate">
+    /// Optional group-claim send-gate (add-group-claim-receive, task 2.3/2.5). When supplied AND enabled, a
+    /// send whose recipient is a GROUP through a shared-bot account is authorized by a valid
+    /// <c>(identity, group)</c> binding + anchor-membership — NOT account ownership — before dispatch; a
+    /// denied group is refused with <c>-32007</c>. <c>null</c> (feature disabled) leaves the send path
+    /// unchanged (user-recipient validation + account-guard exactly as before).
+    /// </param>
     public AuthorizingSignalJsonRpc(
         IJsonRpcMessageHandler messageHandler,
         SignalPrincipal principal,
@@ -75,7 +83,8 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
         Func<bool>? isCredentialLive = null,
         Func<IReadOnlyList<string>, AdmissionDecision>? admitSends = null,
         SignalCliGate? signalCliGate = null,
-        int maxInFlightPerConnection = 0)
+        int maxInFlightPerConnection = 0,
+        GroupSendGate? groupSendGate = null)
         : base(messageHandler)
     {
         _principal = principal ?? throw new ArgumentNullException(nameof(principal));
@@ -85,6 +94,7 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
         _admitSends = admitSends;
         _signalCliGate = signalCliGate;
         _maxInFlight = maxInFlightPerConnection;
+        _groupSendGate = groupSendGate is { Enabled: true } ? groupSendGate : null;
     }
 
     /// <inheritdoc />
@@ -128,9 +138,12 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
 
         // 2. Inbound guards (pre-dispatch): anti-IDOR по account + валідація recipient/тексту (D11).
         //    Відмови кидають RpcErrorException; конвертуємо у детермінований JsonRpcError.
+        //    Group-claim (add-group-claim-receive): виявляємо gated shared-bot group-send — тоді account-guard
+        //    пропускається (авторизація = group binding), а group-recipient'и валідуються gate'ом нижче.
+        var groupSend = ResolveGroupSend(policy, request);
         try
         {
-            RunInboundGuards(policy, request);
+            RunInboundGuards(policy, request, groupSend is not null);
         }
         catch (RpcErrorException ex)
         {
@@ -140,6 +153,25 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
                 RequestId = request.RequestId,
                 Error = RpcErrorSanitizer.CreateDetail(ex, method, _logger),
             };
+        }
+
+        // 2a. Group-claim send-gate (tasks 2.3/2.5): кожна група-таргет через shared-bot має мати активний
+        //     binding + anchor ∈ members(G). Deny → -32007 (санітизовано, anti-oracle). Async (member-cache).
+        if (groupSend is { } gs)
+        {
+            foreach (var groupId in gs.Groups)
+            {
+                var decision = await _groupSendGate!
+                    .EvaluateAsync(_principal.Name, gs.Account, groupId, cancellationToken).ConfigureAwait(false);
+                if (!decision.Allowed)
+                {
+                    _logger?.LogInformation(
+                        "Chokepoint: group-send {Method} відхилено send-gate'ом ({Reason}) → -32007",
+                        method, decision.Reason);
+                    return Error(
+                        request, (JsonRpcErrorCode)GroupClaimErrorCodes.SendDenied, GroupClaimErrorCodes.SendDeniedMessage);
+                }
+            }
         }
 
         // 2b. Admission (W16, tasks 3.2/4.1): ЛИШЕ для send-like методів (політика несе recipients).
@@ -228,8 +260,10 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
     };
 
     // Проганяє inbound-перевірки, які МУСЯТЬ відпрацювати до dispatch: жоден малформований чи
-    // неавторизований виклик не доходить до signal-cli.
-    private void RunInboundGuards(RpcMethodPolicy policy, JsonRpcRequest request)
+    // неавторизований виклик не доходить до signal-cli. isGatedGroupSend=true (group-claim увімкнено,
+    // shared-bot акаунт, є group-recipient) → account-guard пропускаємо (авторизація = binding, task 2.3)
+    // і group-recipient'и не валідуємо як user-recipient (їх гейтить send-gate).
+    private void RunInboundGuards(RpcMethodPolicy policy, JsonRpcRequest request, bool isGatedGroupSend)
     {
         // Anti-IDOR: якщо метод несе account — звіряємо його з principal (W8).
         if (policy.AccountArgName is not null)
@@ -238,13 +272,18 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
             if (string.IsNullOrWhiteSpace(account))
                 throw new RpcErrorException(JsonRpcErrorCode.InvalidParams, "Account cannot be empty.");
 
-            AccountIsolationGuard.AssertAccountAllowed(_principal, account);
+            // Shared-bot group-send: акаунт не в AllowedAccounts caller-а — авторизує group binding, не ownership.
+            if (!isGatedGroupSend)
+                AccountIsolationGuard.AssertAccountAllowed(_principal, account);
         }
 
-        // D11: валідація recipient'ів до dispatch.
+        // D11: валідація recipient'ів до dispatch. У gated group-send group-recipient'и відкидаємо з
+        // user-валідації (їх формат — base64 group-id, не user-id; авторизацію робить send-gate).
         if (policy.RecipientsArgName is not null)
         {
             var recipients = ExtractStringList(request, policy.RecipientsArgName, policy.RecipientsArgIndex);
+            if (isGatedGroupSend)
+                recipients = recipients.Where(static r => !LooksLikeGroup(r)).ToList();
             RecipientValidator.AssertValidUserRecipients(recipients);
         }
 
@@ -256,6 +295,33 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
                 throw new RpcErrorException(JsonRpcErrorCode.InvalidParams, "Message text is invalid or too large.");
         }
     }
+
+    // Виявляє gated shared-bot group-send: group-claim увімкнено, метод несе account+recipients, акаунт —
+    // shared-bot, і серед recipient'ів є хоча б одна валідна група. Повертає (account, groups) для async
+    // send-gate; null → звичайний send-шлях (поведінка незмінна, коли фіча вимкнена).
+    private (string Account, List<string> Groups)? ResolveGroupSend(RpcMethodPolicy policy, JsonRpcRequest request)
+    {
+        if (_groupSendGate is null || policy.RecipientsArgName is null || policy.AccountArgName is null)
+            return null;
+
+        var account = ExtractString(request, policy.AccountArgName, policy.AccountArgIndex);
+        if (string.IsNullOrWhiteSpace(account) || !_groupSendGate.IsSharedBotAccount(account))
+            return null;
+
+        var recipients = ExtractStringList(request, policy.RecipientsArgName, policy.RecipientsArgIndex);
+        var groups = recipients
+            .Where(LooksLikeGroup)
+            .Select(static r => r.Trim())
+            .ToList();
+
+        return groups.Count > 0 ? (account, groups) : null;
+    }
+
+    // «Recipient — група»: валідний base64 group-id І НЕ валідний user-recipient (щоб довгий E.164/username
+    // не сплутати з групою). Див. RecipientValidator.
+    private static bool LooksLikeGroup(string recipient) =>
+        RecipientValidator.IsValidGroupId(recipient) &&
+        !RecipientValidator.TryNormalizeUserRecipient(recipient, out _, out _);
 
     // Дістає рядковий аргумент за іменем АБО позицією (named/positional запити) — через
     // TryGetArgumentByNameOrIndex, який робить типізовану десеріалізацію з форматтера.

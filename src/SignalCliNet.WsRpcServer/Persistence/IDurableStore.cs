@@ -147,6 +147,49 @@ public interface IDurableStore
     IReadOnlyList<AuditLogRecord> GetAuditEntries();
 
     /// <summary>
+    /// Inserts a freshly issued one-time group-claim (its at-rest code hash is the primary key;
+    /// add-group-claim-receive, task 2.1).
+    /// </summary>
+    /// <exception cref="Microsoft.Data.Sqlite.SqliteException">
+    /// The <c>code_hash</c> already exists — a duplicate claim, which MUST surface as an error.
+    /// </exception>
+    void InsertGroupClaim(GroupClaimRecord claim);
+
+    /// <summary>Returns the group-claim with <paramref name="codeHash"/>, or <c>null</c> if absent.</summary>
+    GroupClaimRecord? GetGroupClaim(string codeHash);
+
+    /// <summary>
+    /// Atomically consumes the group-claim <paramref name="codeHash"/> if it is still redeemable at
+    /// <paramref name="now"/> (not consumed, not expired) — conditional <c>UPDATE … WHERE consumed=0</c>
+    /// with rows-affected (W20). Exactly one concurrent confirm wins.
+    /// </summary>
+    /// <param name="codeHash">At-rest hash of the presented code.</param>
+    /// <param name="now">Current time (for the expiry check).</param>
+    /// <returns><c>true</c> if this call consumed the claim; otherwise <c>false</c>.</returns>
+    bool TryConsumeGroupClaim(string codeHash, DateTimeOffset now);
+
+    /// <summary>Inserts a freshly created group-binding (its <c>binding_id</c> is the primary key; task 2.2).</summary>
+    /// <exception cref="Microsoft.Data.Sqlite.SqliteException">
+    /// The <c>binding_id</c> already exists, or <c>identity_id</c> violates the FK — MUST surface as an error.
+    /// </exception>
+    void InsertGroupBinding(GroupBindingRecord binding);
+
+    /// <summary>
+    /// Returns the most-recent group-binding for <paramref name="identityId"/> on
+    /// <paramref name="groupId"/>, or <c>null</c> if none. Callers check <c>Revoked</c>/<c>ExpiresAt</c>.
+    /// </summary>
+    GroupBindingRecord? GetGroupBinding(string identityId, string groupId);
+
+    /// <summary>Returns all group-bindings owned by <paramref name="identityId"/> (newest first).</summary>
+    IReadOnlyList<GroupBindingRecord> GetGroupBindingsForIdentity(string identityId);
+
+    /// <summary>Marks the group-binding <paramref name="bindingId"/> revoked (no-op if absent; task 2.4/2.5).</summary>
+    void RevokeGroupBinding(string bindingId);
+
+    /// <summary>Marks ALL of <paramref name="identityId"/>'s group-bindings revoked (revoke-identity cascade, task 2.4).</summary>
+    void RevokeGroupBindingsForIdentity(string identityId);
+
+    /// <summary>
     /// Writes a consistent online backup of the database to <paramref name="destinationPath"/>
     /// (G4 — the destination SHOULD be a separate encrypted volume; see deploy/DEPLOYMENT.md).
     /// </summary>

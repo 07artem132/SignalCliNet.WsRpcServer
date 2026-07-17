@@ -63,6 +63,14 @@ public sealed class SignalRpcPolicyRegistry : IRpcPolicyRegistry
         new() { Method = "unsubscribe", Kind = RpcPolicyKind.AccountCommand },
         new() { Method = "updateSubscription", Kind = RpcPolicyKind.AccountCommand },
 
+        // --- Group-claim (add-group-claim-receive, секція 2): per-identity self-service ---
+        // Автентифікований principal (не Public), без account-аргумента (як syncAccount/unsubscribe):
+        // caller identity береться з principal, не з клієнтського аргумента. Адаптер додатково гейтить
+        // Server:GroupClaim:Enabled (вимкнено → -32601). requestGroupClaim повертає секрет-код (reflection-DTO).
+        new() { Method = "requestGroupClaim", Kind = RpcPolicyKind.AccountCommand },
+        new() { Method = "listMyBindings", Kind = RpcPolicyKind.AccountCommand },
+        new() { Method = "revokeMyBinding", Kind = RpcPolicyKind.AccountCommand },
+
         // --- Admin: лише IsAdmin-principal (mTLS admin-порт); не-admin → -32001 (add-invites-admin, 3.1) ---
         // createInvite(ttlSeconds?, maxAttempts?) — видача one-time інвайту (секрет-код у відповіді).
         new() { Method = "createInvite", Kind = RpcPolicyKind.Admin },
