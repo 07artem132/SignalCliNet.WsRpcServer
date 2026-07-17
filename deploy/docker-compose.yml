@@ -2,6 +2,11 @@
 # Export GITHUB_USERNAME and GITHUB_TOKEN (PAT with read:packages) first, then
 # run from SignalCliNet.WsRpcServer/deploy:  docker compose up -d --build
 #
+# Топологія: app (wsrpcserver) НЕ публікується на хост — досяжний лише всередині compose-мережі.
+# reverse-proxy (nginx) термінує wss АВТО-згенерованим internal-CA сертифікатом із тому і публікує
+# wss://127.0.0.1:9443. Клієнти довіряють /data/secrets/ca.crt. Для інтернет-експозиції — L4-фаєрвол
+# (nftables/cloud SG) як передумова та/або ACME-домен (див. deploy/DEPLOYMENT.md §4).
+#
 # For the offline / from-source build instead, point dockerfile at
 # Dockerfile.from-source and set context to the parent of the three repos.
 services:
@@ -11,23 +16,73 @@ services:
       dockerfile: deploy/Dockerfile
       args:
         GITHUB_USERNAME: "${GITHUB_USERNAME}"
-        GITHUB_TOKEN: "${GITHUB_TOKEN}"
+      # Feed-токен — BuildKit secret (task 2.4), НЕ build-arg: не потрапляє у шари/історію образу.
+      secrets:
+        - github_token
     image: wsrpcserver:latest
     container_name: wsrpcserver
     restart: unless-stopped
-    ports:
-      # Host:Container. Bind to 127.0.0.1 and terminate TLS in a reverse proxy
-      # (see nginx-wss.conf.example) rather than exposing 9000 to the internet raw.
-      - "127.0.0.1:9000:9000"
+    # G1 (single-instance інваріант): рівно ОДНА репліка на data-dir. Другий екземпляр на тому ж
+    # томі відмовиться стартувати (exclusive lockfile). НЕ масштабуйте (--scale/replicas>1) — деплой
+    # = свідоме downtime-вікно (W15): зупиніть старий контейнер, потім підніміть новий.
+    deploy:
+      mode: replicated
+      replicas: 1
+    # D17: вимикаємо core-dump'и для сервіс-процеса — дамп міг би винести ключі/пеппери на
+    # (можливо незашифрований) шлях. Еквівалент `ulimit -c 0` / systemd `LimitCORE=0`.
+    ulimits:
+      core: 0
+    # Порт 9000 НЕ публікуємо на хост — app досяжний лише всередині compose-мережі (для proxy).
+    # Клієнти підключаються через wss на reverse-proxy (9443), а не до голого ws.
+    expose:
+      - "9000"
     environment:
+      # Docker пробрасує трафік на 0.0.0.0 контейнера, тож app МУСИТЬ біндити 0.0.0.0.
       Server__Host: "0.0.0.0"
       Server__Port: "9000"
+      # D4 (fail-closed): не-loopback bind дозволений лише зі свідомим opt-in оператора + TLS попереду.
+      # Тут безпечно: порт не публікується на хост, а TLS термінується reverse-proxy у тій же мережі.
+      Server__AllowNonLoopback: "true"
+      Server__Tls__Enabled: "true"
+      # Durable-стан (lockfile, SQLite-стор, авто-згенеровані секрети) — на змонтованому томі.
+      # Том МУСИТЬ бути платформно-шифрованим (R3.7/S2 — at-rest шифрування платформи, не app-LUKS).
+      Persistence__DataDirectory: "/data"
       SignalCli__StoragePathCli: "/data/SignalCliStorageData"
       Logging__LogLevel__Default: "Information"
     volumes:
-      # Linked-account keys + signal-cli state. Keep this volume safe — it IS the
-      # linked device. Losing it means re-linking from the phone.
+      # Linked-account keys + signal-cli state + durable-стор + секрети. Keep this volume safe — it
+      # IS the linked device (втрата = повторна прив'язка з телефона). Монтуйте на ENCRYPTED-том.
       - signalcli-data:/data
+    healthcheck:
+      # Готовність = секрети провіжнено (app пройшов стартовий сервіс: lock → секрети → стор).
+      # reverse-proxy стартує лише після цього (йому потрібен server.crt на томі).
+      test: ["CMD-SHELL", "test -f /data/secrets/server.crt"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+
+  reverse-proxy:
+    image: nginx:1.27-alpine
+    container_name: wsrpcserver-proxy
+    restart: unless-stopped
+    depends_on:
+      wsrpcserver:
+        condition: service_healthy
+    ports:
+      # wss на хост-loopback. Для інтернет-експозиції: L4-фаєрвол (nftables/cloud SG) як передумова
+      # (D5/U1) + за наявності домену ACME замість internal-CA (D3) — див. DEPLOYMENT.md §4.
+      - "127.0.0.1:9443:9443"
+    volumes:
+      # RO-доступ до тому заради server.crt/key (приватний ключ 0600 — nginx-master читає як root).
+      - signalcli-data:/data:ro
+      - ./nginx-wss-autocert.conf:/etc/nginx/conf.d/default.conf:ro
 
 volumes:
   signalcli-data:
+
+secrets:
+  # Токен читається з env GITHUB_TOKEN лише під час build і монтується як BuildKit-secret
+  # (не осідає у шарах образу). Потрібен лише для package-based Dockerfile (feed-автентифікація).
+  github_token:
+    environment: GITHUB_TOKEN

@@ -11,10 +11,21 @@
 
     <ItemGroup>
       <PackageReference Include="JSON-RPC.NET" Version="2.7.0" />
+      <!-- Durable-стор (G4/R3.7): embedded SQLite. Microsoft-мейнтейнений провайдер, без відомих CVE;
+           10.0.x у лінії net10. Тягне SQLitePCLRaw.bundle_e_sqlite3 (нативний SQLite) — з nuget.org. -->
+      <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.10" />
+      <!-- Explicit override транзитивного SQLitePCLRaw: 2.1.11 (дефолт Microsoft.Data.Sqlite 10.0.x)
+           має GHSA-2m69-gcr7-jv3q (вразливий бандл нативного SQLite) — CI audit-гейт його блокує.
+           Прибрати, коли Microsoft.Data.Sqlite сам перейде на ≥2.1.12. -->
+      <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
       <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.9" />
       <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.9" />
       <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.9" />
       <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.9" />
+      <!-- Прямий референс потрібен, щоб запустився source-generator [OptionsValidator]
+           (аналайзери не течуть транзитивно) — валідатори Deployment/-опцій (A3). -->
+      <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.9" />
+      <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.9" />
       <PackageReference Include="NetCoreServer" Version="8.0.7" />
       <PackageReference Include="SignalCli.NET" Version="4.10.1" />
       <PackageReference Include="SignalCli.Runtime" Version="0.14.3.1" />
@@ -29,6 +40,11 @@
       <None Update="appsettings.json">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       </None>
+    </ItemGroup>
+
+    <ItemGroup>
+      <!-- Тести звертаються до internal-хелперів Deployment/ (CertificateFactory для renewal-тесту). -->
+      <InternalsVisibleTo Include="SignalCliNet.WsRpcServer.Tests" />
     </ItemGroup>
 
     <!-- SignalCli.Runtime.targets копіює signal-cli лише у build-output ($(TargetDir)),

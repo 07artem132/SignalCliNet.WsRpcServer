@@ -6,15 +6,18 @@
 # NuGet packages from GitHub Packages (nuget.pkg.github.com/07artem132) — no
 # sibling source checkouts needed. Build context is THIS repo only.
 #
-# The feed requires authentication, so pass a GitHub username + a token with
-# read:packages scope:
+# The feed requires authentication. The username is a plain build-arg, but the
+# read:packages TOKEN is passed as a BuildKit build SECRET (task 2.4) so it never
+# lands in an image layer or `docker history` (an ARG token would):
 #
+#   export GITHUB_TOKEN=<PAT-with-read:packages>
 #   docker build -f deploy/Dockerfile \
 #       --build-arg GITHUB_USERNAME=<user> \
-#       --build-arg GITHUB_TOKEN=<PAT-with-read:packages> \
+#       --secret id=github_token,env=GITHUB_TOKEN \
 #       -t wsrpcserver .
 #
-# (docker-compose.yml passes these from the GITHUB_USERNAME / GITHUB_TOKEN env.)
+# (docker-compose.yml wires GITHUB_USERNAME as a build-arg and GITHUB_TOKEN as a
+# build secret.) BuildKit is required (default in modern Docker; `# syntax` above).
 #
 # Offline / no-token alternative that builds the dependencies from sibling
 # source checkouts: see Dockerfile.from-source.
@@ -25,14 +28,17 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 
 ARG GITHUB_USERNAME
-ARG GITHUB_TOKEN
 
 WORKDIR /src
 COPY . .
 
-# Build-time NuGet config: authenticate the GitHub Packages feed declared in the
-# repo's NuGet.Config, fall back to nuget.org for transitive dependencies.
-RUN cat > /tmp/nuget.config <<EOF
+# Single RUN: the feed token is only available for the duration of this step
+# (mounted at /run/secrets/github_token). We write a throwaway NuGet.config with
+# the credentials, publish, and delete it — the token is never written to a layer.
+RUN --mount=type=secret,id=github_token <<'SCRIPT'
+set -e
+GITHUB_TOKEN="$(cat /run/secrets/github_token)"
+cat > /tmp/nuget.config <<EOF
 <?xml version="1.0" encoding="utf-8"?>
 <configuration>
   <packageSources>
@@ -58,14 +64,13 @@ RUN cat > /tmp/nuget.config <<EOF
   </packageSourceMapping>
 </configuration>
 EOF
-
 # Publish the server. The SignalCli.Runtime package's .targets stages signal-cli
 # into the build output; CopySignalCliToPublish (in the csproj) carries it into
 # the publish folder.
-RUN dotnet publish src/SignalCliNet.WsRpcServer/SignalCliNet.WsRpcServer.csproj \
-        -c Release -o /app \
-        --configfile /tmp/nuget.config \
-    && rm -f /tmp/nuget.config
+dotnet publish src/SignalCliNet.WsRpcServer/SignalCliNet.WsRpcServer.csproj \
+    -c Release -o /app --configfile /tmp/nuget.config
+rm -f /tmp/nuget.config
+SCRIPT
 
 # ----------------------------------------------------------------------------
 # Stage 2 — runtime image (ASP.NET + JDK 25 for signal-cli)
@@ -87,6 +92,9 @@ ENV PATH=/opt/jdk25/bin:$PATH
 ENV SignalCli__JavaExecutable=/opt/jdk25/bin/java
 # Persist linked-account keys/state here (mount a volume).
 ENV SignalCli__StoragePathCli=/data/SignalCliStorageData
+# Durable store + auto-generated secrets + single-instance lockfile live here too
+# (same volume — MUST be a platform-encrypted volume; R3.7/S2).
+ENV Persistence__DataDirectory=/data
 
 WORKDIR /app
 COPY --from=build /app ./

@@ -37,8 +37,12 @@ dotnet run --project src/SignalCliNet.WsRpcServer
 
 | Ключ | Дефолт | Опис |
 |---|---|---|
-| `Server:Host` | `127.0.0.1` | Адреса прослуховування. **Не став `0.0.0.0` без auth/firewall.** |
+| `Server:Host` | `127.0.0.1` | Адреса прослуховування. **Не став `0.0.0.0` без TLS/firewall** (див. `Server:AllowNonLoopback`). |
 | `Server:Port` | `9000` | Порт WS. |
+| `Server:AllowNonLoopback` | `false` | **D4 fail-closed.** Свідомий opt-in для не-loopback bind. Сервер **відмовиться стартувати** на не-loopback адресі без цього прапорця. Вимагає `Server:Tls:Enabled=true`. |
+| `Server:Tls:Enabled` | `false` | Підтвердження оператора, що TLS сконфігуровано перед сервером (термінація у reverse-proxy). Передумова для не-loopback bind. |
+| `Server:Tls:Hostname` | — | Internal-hostname у SAN авто-згенерованого server-cert (для internal-CA деплою без домену; опційно). |
+| `Persistence:DataDirectory` | `data` | Каталог durable-стану: lockfile (G1), SQLite-стор, авто-згенеровані секрети (CA/cert/пеппери). **МУСИТЬ бути на платформно-шифрованому томі** (R3.7). У контейнері — `/data`. |
 | `SignalCli:LibDirectory` | `signal-cli/lib` | Шлях до signal-cli lib (payload `SignalCli.Runtime`). |
 | `SignalCli:StoragePathCli` | `SignalCliStorageData` | Дані акаунта signal-cli (git-ignored; **не комітити**). |
 | `SignalCli:AppHome` | — | Override домашньої теки signal-cli (опційно). |
@@ -48,6 +52,19 @@ dotnet run --project src/SignalCliNet.WsRpcServer
 | `SignalCli:HealthCheckTimeoutSeconds` | `10` | Таймаут health-ping. |
 
 Усе override-иться через environment (`Host.CreateDefaultBuilder`).
+
+## Durable-стан і секрети (Фаза 2 фундамент)
+
+На першому старті сервер авто-генерує на `Persistence:DataDirectory` (persist-once, права `0600`
+на Unix): TLS CA + server-cert + admin mTLS-cert і пеппери `pepper_token`/`pepper_abuse`. На
+рестартах вони **переюзаються** (CA ніколи не перегенеровується — інакше зламався б client-trust);
+прострочені leaf-cert переоформлюються тим самим CA. Секрети **ніколи** не потрапляють у
+env/логи/шари образу.
+
+Поруч лежить embedded SQLite-стор (`durable.db`, WAL) з identity/binding-станом; на старті —
+integrity-check (пошкоджена БД → **відмова старту**) і версіонована міграція схеми
+(`PRAGMA user_version`). Data-dir захищено exclusive lockfile: **другий процес на тому ж каталозі
+не стартує** (G1, `replicas=1`).
 
 ## Receive-mode (send-only MVP)
 
