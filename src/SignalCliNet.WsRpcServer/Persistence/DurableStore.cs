@@ -458,6 +458,98 @@ public sealed class DurableStore : IDurableStore, IDisposable
     }
 
     /// <inheritdoc />
+    public int CountBudgetBlocks(string windowKey)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(windowKey);
+
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    "SELECT COUNT(*) FROM budget_reservations WHERE window_key = $window;";
+                command.Parameters.AddWithValue("$window", windowKey);
+                return Convert.ToInt32(command.ExecuteScalar());
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public void InsertBudgetBlock(string windowKey, int blockIndex, int blockSize, DateTimeOffset reservedAt)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(windowKey);
+
+        lock (_sync)
+        {
+            WithRetry(() =>
+            {
+                // Прямий INSERT (не OR IGNORE): конфлікт PK (window_key, block_index) = double-reserve,
+                // який МУСИТЬ кинути (SqliteException не є BUSY/LOCKED, тож WithRetry його не ковтає).
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    INSERT INTO budget_reservations (window_key, block_index, block_size, reserved_at)
+                    VALUES ($window, $index, $size, $reserved);
+                    """;
+                command.Parameters.AddWithValue("$window", windowKey);
+                command.Parameters.AddWithValue("$index", blockIndex);
+                command.Parameters.AddWithValue("$size", blockSize);
+                command.Parameters.AddWithValue("$reserved", FormatTimestamp(reservedAt));
+                command.ExecuteNonQuery();
+                return 0;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public bool IsKnownRecipient(string identityId, string recipientHash)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(identityId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(recipientHash);
+
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    "SELECT 1 FROM known_recipients WHERE identity_id = $id AND recipient_hash = $hash LIMIT 1;";
+                command.Parameters.AddWithValue("$id", identityId);
+                command.Parameters.AddWithValue("$hash", recipientHash);
+                using var reader = command.ExecuteReader();
+                return reader.Read();
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public void UpsertKnownRecipient(string identityId, string recipientHash, DateTimeOffset firstSeen)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(identityId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(recipientHash);
+
+        lock (_sync)
+        {
+            WithRetry(() =>
+            {
+                // INSERT OR IGNORE: first_seen первинного контакту зберігається (повторний контакт — no-op).
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    INSERT OR IGNORE INTO known_recipients (identity_id, recipient_hash, first_seen)
+                    VALUES ($id, $hash, $seen);
+                    """;
+                command.Parameters.AddWithValue("$id", identityId);
+                command.Parameters.AddWithValue("$hash", recipientHash);
+                command.Parameters.AddWithValue("$seen", FormatTimestamp(firstSeen));
+                command.ExecuteNonQuery();
+                return 0;
+            });
+        }
+    }
+
+    /// <inheritdoc />
     public void Backup(string destinationPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);

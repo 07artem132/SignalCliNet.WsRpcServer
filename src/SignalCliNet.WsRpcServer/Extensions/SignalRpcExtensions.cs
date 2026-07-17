@@ -46,6 +46,11 @@ public static class SignalRpcExtensions
         // опції з AddSecureDeployment (реєструється у Program.cs).
         services.AddAuthnCore(configuration);
 
+        // Admission-core (W16 ланцюг: global-pause → per-user quota → new-recipient → aggregate budget):
+        // reserve-then-send бюджет, abuse-пеппер, AdmissionOptions (Server:Admission). Опт-ін (Enabled=false
+        // за замовчуванням); спирається на той самий durable-стор.
+        services.AddAdmissionCore(configuration);
+
         // RPC adapters
         services.AddScoped<ISignalAccountsRpc, SignalAccountsRpcAdapter>();
         services.AddScoped<ISignalDevicesRpc, SignalDevicesRpcAdapter>();

@@ -64,6 +64,24 @@ internal static class SchemaMigrator
                 created_at  TEXT NOT NULL
             ) STRICT;
             """),
+
+        (3,
+            """
+            CREATE TABLE budget_reservations (
+                window_key   TEXT NOT NULL,
+                block_index  INTEGER NOT NULL,
+                block_size   INTEGER NOT NULL,
+                reserved_at  TEXT NOT NULL,
+                PRIMARY KEY (window_key, block_index)
+            ) STRICT;
+
+            CREATE TABLE known_recipients (
+                identity_id     TEXT NOT NULL REFERENCES identities(id) ON DELETE CASCADE,
+                recipient_hash  TEXT NOT NULL,
+                first_seen      TEXT NOT NULL,
+                PRIMARY KEY (identity_id, recipient_hash)
+            ) STRICT;
+            """),
     ];
 
     /// <summary>Migrates <paramref name="connection"/> up to <see cref="LatestVersion"/>.</summary>

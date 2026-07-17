@@ -15,6 +15,15 @@ public static class AuthCloseCodes
 
     /// <summary>Authentication handshake timed out before the session became active.</summary>
     public const int AuthTimeout = 4408;
+
+    /// <summary>
+    /// A transport rate/admission limit closed the connection (per-identity connection cap or
+    /// message-rate flood, task 3.2). In-band analogue of HTTP <c>429</c>: браузерний клієнт бачить
+    /// саме цей close-код (а не невидимий pre-upgrade 429) і читає машиночитний reason
+    /// (<see cref="Admission.RateLimitCloseReasons"/>). Idle-timeout НЕ використовує цей код — воно
+    /// закриває штатним <c>1000</c> (це не rate-подія).
+    /// </summary>
+    public const int RateLimited = 4429;
 }
 
 /// <summary>Machine-readable close reasons carried in the close-frame payload (single word).</summary>

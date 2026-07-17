@@ -4,6 +4,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using SignalCli.Extensions;
 using SignalCliNet.WsRpcServer.Extensions;
+using WsRpcServer.Core;
 
 namespace SignalCliNet.WsRpcServer;
 
@@ -29,16 +30,7 @@ public static class Program
                 services.AddSignalEvents();
 
                 services.AddSignalJsonRpc(hostContext.Configuration, options =>
-                {
-                    var serverSection = hostContext.Configuration.GetSection("Server");
-
-                    var serverHost = serverSection["Host"];
-                    if (!string.IsNullOrWhiteSpace(serverHost))
-                        options.Host = serverHost;
-
-                    if (int.TryParse(serverSection["Port"], out var port))
-                        options.Port = port;
-                });
+                    ApplyServerConfig(hostContext.Configuration.GetSection("Server"), options));
             })
             .ConfigureLogging((hostContext, logging) =>
             {
@@ -49,6 +41,30 @@ public static class Program
             .Build();
 
         await host.RunAsync();
+    }
+
+    /// <summary>
+    /// Maps the "Server" configuration section onto <see cref="JsonRpcServerConfig"/> (Host/Port and the
+    /// deploy message-size cap). Extracted from the host-builder lambda so the passthrough is unit-testable.
+    /// </summary>
+    /// <param name="serverSection">The "Server" configuration section.</param>
+    /// <param name="options">The framework JSON-RPC server config to populate.</param>
+    public static void ApplyServerConfig(IConfigurationSection serverSection, JsonRpcServerConfig options)
+    {
+        ArgumentNullException.ThrowIfNull(serverSection);
+        ArgumentNullException.ThrowIfNull(options);
+
+        var serverHost = serverSection["Host"];
+        if (!string.IsNullOrWhiteSpace(serverHost))
+            options.Host = serverHost;
+
+        if (int.TryParse(serverSection["Port"], out var port))
+            options.Port = port;
+
+        // V3: дефолт деплою — 64KB (65536). Framework-дефолт 100MB завеликий для JSON-RPC-керівних
+        // кадрів; менша стеля обмежує пам'ять на кадр. Задається у appsettings.json / Docker env.
+        if (int.TryParse(serverSection["MaxMessageSizeBytes"], out var maxMessageSize))
+            options.MaxMessageSizeBytes = maxMessageSize;
     }
 
     /// <summary>

@@ -61,6 +61,34 @@ public interface IDurableStore
     DeviceSecretRecord? GetDeviceSecret(string identityId);
 
     /// <summary>
+    /// Counts the durably-reserved budget blocks for <paramref name="windowKey"/> (admission W13). The
+    /// block count times the block size is the units already reserved this window.
+    /// </summary>
+    int CountBudgetBlocks(string windowKey);
+
+    /// <summary>
+    /// Durably reserves one budget block (<paramref name="blockIndex"/> units of
+    /// <paramref name="blockSize"/>) for <paramref name="windowKey"/> (admission W13).
+    /// </summary>
+    /// <exception cref="Microsoft.Data.Sqlite.SqliteException">
+    /// The <c>(window_key, block_index)</c> pair already exists — a double-reserve, which MUST surface as
+    /// an error (never silently succeed).
+    /// </exception>
+    void InsertBudgetBlock(string windowKey, int blockIndex, int blockSize, DateTimeOffset reservedAt);
+
+    /// <summary>
+    /// Returns whether <paramref name="recipientHash"/> is already a known (previously-contacted) recipient
+    /// of <paramref name="identityId"/> (admission D2). The stored value is a hash — never a raw identifier.
+    /// </summary>
+    bool IsKnownRecipient(string identityId, string recipientHash);
+
+    /// <summary>
+    /// Records <paramref name="recipientHash"/> as a known recipient of <paramref name="identityId"/>
+    /// (admission D2), preserving the original <paramref name="firstSeen"/> on repeat contact (idempotent).
+    /// </summary>
+    void UpsertKnownRecipient(string identityId, string recipientHash, DateTimeOffset firstSeen);
+
+    /// <summary>
     /// Writes a consistent online backup of the database to <paramref name="destinationPath"/>
     /// (G4 — the destination SHOULD be a separate encrypted volume; see deploy/DEPLOYMENT.md).
     /// </summary>

@@ -39,6 +39,7 @@ dotnet run --project src/SignalCliNet.WsRpcServer
 |---|---|---|
 | `Server:Host` | `127.0.0.1` | Адреса прослуховування. **Не став `0.0.0.0` без TLS/firewall** (див. `Server:AllowNonLoopback`). |
 | `Server:Port` | `9000` | Порт WS. |
+| `Server:MaxMessageSizeBytes` | `65536` | **V3.** Стеля розміру WS-кадру (64KB — дефолт деплою). Framework-дефолт бібліотеки — 100MB, завеликий для JSON-RPC-керівних кадрів; менша стеля обмежує пам'ять на кадр. Кадр понад ліміт → close `MessageTooBig` (1009). |
 | `Server:AllowNonLoopback` | `false` | **D4 fail-closed.** Свідомий opt-in для не-loopback bind. Сервер **відмовиться стартувати** на не-loopback адресі без цього прапорця. Вимагає `Server:Tls:Enabled=true`. |
 | `Server:Tls:Enabled` | `false` | Підтвердження оператора, що TLS сконфігуровано перед сервером (термінація у reverse-proxy). Передумова для не-loopback bind. |
 | `Server:Tls:Hostname` | — | Internal-hostname у SAN авто-згенерованого server-cert (для internal-CA деплою без домену; опційно). |
@@ -58,6 +59,62 @@ dotnet run --project src/SignalCliNet.WsRpcServer
 | `SignalCli:HealthCheckTimeoutSeconds` | `10` | Таймаут health-ping. |
 
 Усе override-иться через environment (`Host.CreateDefaultBuilder`).
+
+## Rate limits (admission)
+
+Anti-abuse / admission-ліміти (send-бюджет, per-identity cap конектів, msg-rate, idle-timeout,
+in-flight cap, server-wide гейт до signal-cli) — **опт-ін**, як і auth. З `Server:Admission:Enabled=false`
+(дефолт) жоден ліміт не діє й поведінка незмінна. Вмикай разом із `Server:Auth:Enabled=true`
+(бюджети мають сенс лише коли є identity).
+
+| Ключ | Дефолт | Опис |
+|---|---|---|
+| `Server:Admission:Enabled` | `false` | Головний перемикач. `false` ⇒ admission-фасад пропускає все без side-effect, транспортні ліміти вимкнені. |
+| `Server:Admission:AggregateBudgetPerWindow` | `300` | Σ-стеля send'ів за вікно на всі identity (анти-бан бюджет, W13, 1..100000). |
+| `Server:Admission:BudgetWindowMinutes` | `60` | Довжина admission-вікна, хв (спільна для бюджету/floor/new-recipient, 1..1440). |
+| `Server:Admission:PerUserFloorPerWindow` | `10` | Гарантований floor send'ів на identity під агрегатом (G2, 0..10000). МУСИТЬ бути ≤ `AggregateBudgetPerWindow`. |
+| `Server:Admission:NewRecipientsPerWindow` | `5` | Максимум НОВИХ (first-contact) отримувачів на identity/вікно (D2, 1..1000). |
+| `Server:Admission:ReserveBlockSize` | `10` | Гранула durable-резервації бюджету K (W13, 1..1000). |
+| `Server:Admission:MaxConnectionsPerIdentity` | `4` | Cap одночасних автентифікованих сокетів на одну identity (1..256). Перевищення → close `4429` (`too-many-connections`). Loopback поза cap. |
+| `Server:Admission:MessagesPerMinutePerConnection` | `100` | Msg-rate per-connection (token-bucket; ємність = burst, 1..10000). Перевищення → close `4429` (`message-rate:<sec>`). Ping/pong не рахуються. |
+| `Server:Admission:IdleTimeoutMinutes` | `30` | Idle-timeout: мовчазна (без data-кадрів) сесія закривається штатним `1000` (`idle-timeout`, 1..1440). |
+| `Server:Admission:MaxInFlightPerConnection` | `8` | Cap одночасних in-flight RPC на з'єднання (D12, 1..256). Понад → `-32005` (`retry_after=1`), без черги. |
+| `Server:Admission:SignalCliConcurrencyLimit` | `4` | Server-wide неблокуючий гейт паралельних dispatch'ів до signal-cli (G6, 1..64). Зайнято → `-32005` (`retry_after=1`) — pending не росте unbounded. |
+
+> **Auth-timeout — не тут.** Скільки браузерна сесія може лишатись неавтентифікованою — це
+> `Server:Auth:AuthTimeoutSeconds` (close `4408`), див. таблицю Auth вище. Не дублюється в admission.
+
+### Контракт відмов (для клієнтів)
+
+Перевищення ліміту повідомляється **in-band** (щоб бачив і браузерний WS-клієнт, якому HTTP-`429`
+до апгрейду невидимий — GAPS S9):
+
+- **`-32005` JSON-RPC error** — для відмов на рівні виклику (send-бюджет, in-flight cap, G6-гейт).
+  `error.data` = `{"retry_after": <int секунд>}`, `error.message` = `"Rate limit exceeded"` (без PII).
+- **WS close `4429`** — для транспортних відмов, що рвуть сокет. Машиночитний `reason` у close-payload:
+  - `too-many-connections` — перевищено per-identity cap конектів;
+  - `message-rate:<sec>` — msg-rate флуд; суфікс `<sec>` — retry_after у секундах (сам код `4429`
+    секунд не несе, тож вони в reason-рядку).
+- **WS close `1000` `idle-timeout`** — не rate-подія: сесія мовчала довше за `IdleTimeoutMinutes`.
+  Клієнт може перепідключитись одразу (без backoff).
+
+**Рекомендація клієнтам (jittered backoff, G13).** На `-32005`/`4429` не ретрайте одразу й не в унісон.
+Стартуйте з `retry_after` (якщо є) або base = **1с**, множник **2** на кожну наступну відмову, з
+джитером **±50%**, cap **60с**. Приклад: `delay = min(60, base * 2^n) * (0.5 + random()*1.0)`.
+Це розводить «громовий стукіт» ретраїв і не поглиблює перевантаження.
+
+### L4-передумова та frame-assembly (D5/U1/S5 — поза застосунком)
+
+Ці ліміти — application-рівень; вони **не** замінюють мережевий периметр:
+
+- **L4-фаєрвол — передумова не-loopback експозиції (D5/U1).** Перед виставленням назовні став
+  nftables / cloud SG, що пускає лише довірені джерела. App-ліміти бачать трафік лише **після**
+  TCP+TLS+upgrade; SYN-флуд/конект-флуд до апгрейду відсікає саме L4 (див. `deploy/DEPLOYMENT.md §4`).
+- **Frame-assembly-тріада — accepted-risk поза app (S5-канон).** Захист від зловмисної WS-фрагментації
+  (нескінченні continuation-кадри, повільне складання, зомбі-fragment-буфери) **не** реалізується
+  тут — це відповідальність транспорту/reverse-proxy. `permessage-deflate` вимкнено (zip-bomb
+  неможливий, V6), а `MaxMessageSizeBytes` (64KB) обмежує зібраний кадр. Решта тріади — свідомо
+  прийнятий ризик на рівні застосунку.
 
 ## Durable-стан і секрети (Фаза 2 фундамент)
 
