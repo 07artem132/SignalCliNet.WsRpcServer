@@ -15,6 +15,7 @@ using SignalCliNet.WsRpcServer.Deployment;
 using SignalCliNet.WsRpcServer.Persistence;
 using SignalCliNet.WsRpcServer.Security;
 using SignalCliNet.WsRpcServer.Security.Admission;
+using SignalCliNet.WsRpcServer.Security.Idempotency;
 using SignalCliNet.WsRpcServer.Serialization;
 using StreamJsonRpc;
 using WsRpcServer.Core;
@@ -62,6 +63,9 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
     private readonly SignalCliGate _signalCliGate;
     private readonly AdmissionOptions _admissionOptions;
     private readonly TimeProvider _timeProvider;
+
+    // add-ops-observability (task 3.3): координатор idempotency+admission (dedup ПЕРЕД admission).
+    private readonly IdempotentSendCoordinator _idempotentCoordinator;
 
     // Group-claim send-gate (add-group-claim-receive). Активний лише коли GroupClaim:Enabled (сам gate
     // гейтить прапорцем); передається у chokepoint, який нулить його, якщо фіча вимкнена. Опційний:
@@ -119,6 +123,7 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
         SignalCliGate signalCliGate,
         IOptions<AdmissionOptions> admissionOptions,
         TimeProvider timeProvider,
+        IdempotentSendCoordinator idempotentCoordinator,
         GroupSendGate? groupSendGate = null)
         : base(server, logger, config)
     {
@@ -137,6 +142,7 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
         _signalCliGate = signalCliGate ?? throw new ArgumentNullException(nameof(signalCliGate));
         _admissionOptions = (admissionOptions ?? throw new ArgumentNullException(nameof(admissionOptions))).Value;
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+        _idempotentCoordinator = idempotentCoordinator ?? throw new ArgumentNullException(nameof(idempotentCoordinator));
         _groupSendGate = groupSendGate;   // опційний (null у мінімальних DI-провайдерах)
 
         _authMachine = new SessionAuthStateMachine(_authOptions.Enabled);
@@ -324,7 +330,8 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
 
         // Транспортні ліміти (admission, tasks 3.2/3.3) — лише коли Admission:Enabled. Вимкнено ⇒ усі
         // нові параметри chokepoint'а null/0, тож поведінка ідентична попередній (опт-ін, як auth).
-        Func<IReadOnlyList<string>, AdmissionDecision>? admitSends = null;
+        Func<string?, IReadOnlyList<string>, IdempotentSendOutcome>? beginSend = null;
+        Action<string, string>? completeSend = null;
         SignalCliGate? gate = null;
         var maxInFlight = 0;
         if (_admissionOptions.Enabled)
@@ -347,8 +354,13 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
 
             // Admission-identity: token → реальна identity; loopback (auth вимкнено, admission увімкнено)
             // → спільний ключ "loopback" (спільний бюджет/floor на одну identity — задокументовано).
+            // Координатор dedup+admission (task 3.3): dedup-lookup ПЕРЕД admission; на miss — admission +
+            // атомарний pending-claim. Без messageId → чиста admission (поведінка незмінна).
             var admissionIdentity = _identityId ?? "loopback";
-            admitSends = recipients => _admissionControl.Admit(admissionIdentity, recipients);
+            beginSend = (messageId, recipients) =>
+                _idempotentCoordinator.Begin(admissionIdentity, messageId, recipients);
+            completeSend = (messageId, resultJson) =>
+                _idempotentCoordinator.Complete(admissionIdentity, messageId, resultJson);
             gate = _signalCliGate;
             maxInFlight = _admissionOptions.MaxInFlightPerConnection;
         }
@@ -361,11 +373,12 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
 
             // V9: pre-dispatch chokepoint замість голого JsonRpc — кожен виклик проходить герметичний
             // default-deny + IDOR-guard + санітизацію помилок. Principal сесії читається per-invocation.
-            // admitSends/gate/maxInFlight — send-admission (W16) + G6-гейт + in-flight cap (лише коли увімкнено).
+            // beginSend/completeSend — координатор dedup+admission (W16 + T6); gate/maxInFlight — G6-гейт +
+            // in-flight cap (лише коли увімкнено). admitSends=null: координатор суперседить чисту admission.
             // groupSendGate — claim-гейт групових send'ів (сам нулиться в chokepoint, якщо GroupClaim вимкнено).
             JsonRpc = new AuthorizingSignalJsonRpc(
-                _messageHandler, principal, _policyRegistry, Logger, isCredentialLive, admitSends, gate, maxInFlight,
-                _groupSendGate);
+                _messageHandler, principal, _policyRegistry, Logger, isCredentialLive, admitSends: null, gate,
+                maxInFlight, _groupSendGate, beginSend: beginSend, completeSend: completeSend);
 
             // Configure JSON-RPC
             JsonRpc.CancelLocallyInvokedMethodsWhenConnectionIsClosed = true;

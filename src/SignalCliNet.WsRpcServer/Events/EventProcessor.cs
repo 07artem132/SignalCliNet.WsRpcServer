@@ -12,7 +12,7 @@ namespace SignalCliNet.WsRpcServer.Events;
 /// Processes Signal events and distributes them to subscribed clients.
 /// Uses an efficient scheduling and notification mechanism.
 /// </summary>
-public class EventProcessor : AbstractEventProcessor
+public class EventProcessor : AbstractEventProcessor, IAppNotifier
 {
     private readonly ISignalEventService _eventService;
     private readonly ISubscriptionManager<SignalEventTypes, BaseSignalEventArgs> _subscriptionManager;
@@ -37,6 +37,21 @@ public class EventProcessor : AbstractEventProcessor
 
         // Register handlers for each event type
         RegisterEventHandlers();
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// App-level fan-out (heartbeat / bot.paused / bot.resumed) через ту саму per-client чергу, що й події
+    /// (reuse fire-and-forget + M1 авто-відписки). Payload — БЕЗ PII (A1). Знімок ключів — щоб не тримати
+    /// enumerator під час доставки (ClientHandlers — ConcurrentDictionary).
+    /// </remarks>
+    public void Broadcast(string method, object payload)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(method);
+        ArgumentNullException.ThrowIfNull(payload);
+
+        foreach (var clientId in ClientHandlers.Keys)
+            NotifyClient(clientId, method, payload);
     }
 
     /// <summary>

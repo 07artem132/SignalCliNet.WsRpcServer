@@ -156,6 +156,24 @@ internal static class SchemaMigrator
             CREATE INDEX ix_group_bindings_identity ON group_bindings(identity_id);
             CREATE INDEX ix_group_bindings_group ON group_bindings(group_id);
             """),
+
+        // v7 (add-ops-observability, task 3.3): durable send-idempotency (dedup) стор. Ключ
+        // (identity_id, message_id) — без крос-тенантних колізій (T6); переживає рестарт. status:
+        // 'pending' (send почато, outcome unknown — at-most-once форфейт при краші) → 'done' (result_json
+        // збережено; ретрай отримує його БЕЗ повторного send/декременту). budget_reserved — прапорець
+        // володіння зарезервованою одиницею бюджету (декремент робить admission ДО claim-у, ordering-i).
+        (7,
+            """
+            CREATE TABLE send_dedup (
+                identity_id     TEXT NOT NULL,
+                message_id      TEXT NOT NULL,
+                status          TEXT NOT NULL,
+                result_json     TEXT,
+                budget_reserved INTEGER NOT NULL DEFAULT 0,
+                created_at      TEXT NOT NULL,
+                PRIMARY KEY (identity_id, message_id)
+            ) STRICT;
+            """),
     ];
 
     /// <summary>Migrates <paramref name="connection"/> up to <see cref="LatestVersion"/>.</summary>

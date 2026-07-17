@@ -1,5 +1,7 @@
 ﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
 using SignalCli.Models.Signal.Events;
 using SignalCliNet.WsRpcServer.Deployment;
 using SignalCliNet.WsRpcServer.Events;
@@ -37,6 +39,10 @@ public static class SignalRpcExtensions
         services.AddSingleton<ISubscriptionManager<SignalEventTypes, BaseSignalEventArgs>, SubscriptionManager>();
         services.AddSingleton<IEventProcessor, EventProcessor>();
         services.AddSingleton<IRpcServiceRegistry, RpcServiceRegistry>();
+
+        // App-notifier (add-ops-observability, tasks 2.2/3.2): та сама EventProcessor-інстанція, друга роль
+        // — fan-out heartbeat/bot.paused/bot.resumed усім активним клієнтам через notify-інфру.
+        services.AddSingleton<IAppNotifier>(sp => (IAppNotifier)sp.GetRequiredService<IEventProcessor>());
 
         // Pre-dispatch authorization chokepoint: декларативний реєстр політик (default-deny),
         // незалежний від авто-дискавері. Singleton — таблиця незмінна на весь час життя процесу.
@@ -88,6 +94,14 @@ public static class SignalRpcExtensions
         services.AddScoped<ISignalAdminRpc, SignalAdminRpcAdapter>();
         services.AddScoped<ISignalGroupClaimRpc, SignalGroupClaimRpcAdapter>();
         services.AddScoped<ISystemRpc, SystemRpcAdapter>();
+
+        // Server-heartbeat (add-ops-observability, task 3.2): опції Server:Heartbeat (валідовані; interval
+        // строго <25с, C5) + hosted-service, що шле app-level heartbeat-нотіфи активним WS-клієнтам.
+        services.AddOptionsWithValidateOnStart<HeartbeatOptions>()
+            .Bind(configuration.GetSection(HeartbeatOptions.SectionName));
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<HeartbeatOptions>, HeartbeatOptionsValidator>());
+        services.AddHostedService<HeartbeatHostedService>();
 
         // Server hosted service (плейн token-порт)
         services.AddHostedService<SignalRpcHostedService>();

@@ -33,3 +33,14 @@ internal sealed partial class AdmissionOptionsValidator : IValidateOptions<Admis
 // ClaimRequestsPerHourPerIdentity 1..1000, MemberCacheTtlSeconds 5..3600) — через [Range]. Крос-правил немає.
 [OptionsValidator]
 internal sealed partial class GroupClaimOptionsValidator : IValidateOptions<GroupClaimOptions>;
+
+/// <summary>Compile-time validator for <see cref="GlobalPauseOptions"/> (DataAnnotations [Range] bounds).</summary>
+// Межові правила (BasePauseSeconds 5..3600, MaxPauseSeconds 5..21600) — через [Range]. Крос-правило
+// BasePauseSeconds ≤ MaxPauseSeconds — .Validate(...) у AddAdmissionCore (add-ops-observability, task 2.2).
+[OptionsValidator]
+internal sealed partial class GlobalPauseOptionsValidator : IValidateOptions<GlobalPauseOptions>;
+
+/// <summary>Compile-time validator for <see cref="HeartbeatOptions"/> (DataAnnotations [Range] bounds).</summary>
+// Межове правило (IntervalSeconds 1..24 — строго &lt;25с, C5) — через [Range]. Крос-правил немає.
+[OptionsValidator]
+internal sealed partial class HeartbeatOptionsValidator : IValidateOptions<HeartbeatOptions>;

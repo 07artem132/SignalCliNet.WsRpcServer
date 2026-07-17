@@ -357,7 +357,7 @@ public sealed class AdmissionDodTests : IDisposable
             backend
                 .Setup(m => m.SendTextMessage(
                     It.IsAny<string>(), It.IsAny<IEnumerable<string>>(), It.IsAny<string>(),
-                    It.IsAny<CancellationToken>()))
+                    It.IsAny<string?>(), It.IsAny<CancellationToken>()))
                 .Returns(async () =>
                 {
                     Interlocked.Increment(ref stack._backendCalls);

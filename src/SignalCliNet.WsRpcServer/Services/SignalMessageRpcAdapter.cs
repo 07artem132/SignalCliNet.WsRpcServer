@@ -3,16 +3,23 @@ using SignalCli.Interfaces.Signal;
 using SignalCli.Models.Signal.Message;
 using SignalCliNet.WsRpcServer.Interfaces;
 using SignalCliNet.WsRpcServer.Security;
+using SignalCliNet.WsRpcServer.Security.Fail;
 using StreamJsonRpc.Protocol;
 using WsRpcServer.Exceptions;
 
 namespace SignalCliNet.WsRpcServer.Services;
 
-public class SignalMessageRpcAdapter(ISignalMessage signalMessage, ILogger<SignalMessageRpcAdapter> logger)
+public class SignalMessageRpcAdapter(
+    ISignalMessage signalMessage,
+    UpstreamSendFailureMapper failureMapper,
+    ILogger<SignalMessageRpcAdapter> logger)
     : ISignalMessageRpc
 {
     private readonly ISignalMessage _signalMessage =
         signalMessage ?? throw new ArgumentNullException(nameof(signalMessage));
+
+    private readonly UpstreamSendFailureMapper _failureMapper =
+        failureMapper ?? throw new ArgumentNullException(nameof(failureMapper));
 
     private readonly ILogger<SignalMessageRpcAdapter> _logger =
         logger ?? throw new ArgumentNullException(nameof(logger));
@@ -21,9 +28,11 @@ public class SignalMessageRpcAdapter(ISignalMessage signalMessage, ILogger<Signa
         string account,
         IEnumerable<string> recipients,
         string message,
+        string? messageId = null,
         CancellationToken cancellationToken = default)
     {
-        // privacy (CLAUDE rule #4): не логувати account(=E.164) — лише факт виклику
+        // privacy (CLAUDE rule #4): не логувати account(=E.164)/messageId — лише факт виклику.
+        // messageId (idempotency-key) обробляє chokepoint (dedup); тут — не для signal-cli, ігноруємо.
         _logger.LogInformation("RPC: Request to send text message");
 
         if (string.IsNullOrWhiteSpace(account))
@@ -50,14 +59,15 @@ public class SignalMessageRpcAdapter(ISignalMessage signalMessage, ILogger<Signa
 
             return await _signalMessage.SendTextMessageAsync(options, cancellationToken).ConfigureAwait(false);
         }
-        catch (RpcErrorException)
-        {
-            throw;
-        }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error sending text message");
-            throw new RpcErrorException(JsonRpcErrorCode.InvocationError, "Error sending text message", ex);
+            // V10 catch-матриця (tasks 2.1/2.2/2.3): типізовані upstream (-4/-5/-6/base JSON-RPC) + non-RPC
+            // (cancel/IO/timeout/disposed) → санітизовані коди; -5/-6 тригерять global-pause; restart-cancel
+            // (W10) відрізняється від client-cancel. Мапер повертає виняток для (пере)кидання.
+            var mapped = _failureMapper.Map(ex, cancellationToken, "sendTextMessage");
+            if (ReferenceEquals(mapped, ex))
+                throw;   // пропускаємо оригінал (client-cancel / уже-санітизований) зі збереженням стеку
+            throw mapped;
         }
     }
 
@@ -69,4 +79,3 @@ public class SignalMessageRpcAdapter(ISignalMessage signalMessage, ILogger<Signa
             ? new GroupRecipient(raw.Trim())
             : new UserRecipient(raw);
 }
-

@@ -190,6 +190,36 @@ public interface IDurableStore
     void RevokeGroupBindingsForIdentity(string identityId);
 
     /// <summary>
+    /// Returns the send-dedup row for <paramref name="identityId"/>/<paramref name="messageId"/>, or
+    /// <c>null</c> if none (idempotency lookup, task 3.3). Read BEFORE admission by the coordinator.
+    /// </summary>
+    SendDedupRecord? GetSendDedup(string identityId, string messageId);
+
+    /// <summary>
+    /// Atomically claims a <c>pending</c> send-dedup row for <paramref name="identityId"/>/
+    /// <paramref name="messageId"/> (task 3.3): a single <c>INSERT OR IGNORE</c> that returns <c>true</c>
+    /// iff THIS call inserted the row. A <c>false</c> means a concurrent/retried call already owns the
+    /// <c>messageId</c> — the caller MUST NOT send (at-most-once). <c>budget_reserved</c> is stamped
+    /// <c>1</c> because the caller reserves the aggregate-budget unit through admission immediately BEFORE
+    /// this claim (ordering-i; see <c>IdempotentSendCoordinator</c>).
+    /// </summary>
+    /// <param name="identityId">The sending identity.</param>
+    /// <param name="messageId">The client idempotency key.</param>
+    /// <param name="now">Timestamp stamped on the new <c>pending</c> row.</param>
+    /// <returns><c>true</c> if this call claimed the row; <c>false</c> if it already existed.</returns>
+    bool TryBeginSend(string identityId, string messageId, DateTimeOffset now);
+
+    /// <summary>
+    /// Completes a <c>pending</c> send-dedup row (task 3.3): sets <c>status='done'</c> and stores
+    /// <paramref name="resultJson"/> — but ONLY while the row is still <c>pending</c> (conditional
+    /// <c>WHERE status='pending'</c>), so a resume-race never overwrites a finished result.
+    /// </summary>
+    /// <param name="identityId">The sending identity.</param>
+    /// <param name="messageId">The client idempotency key.</param>
+    /// <param name="resultJson">The first-call result JSON to persist for future retries.</param>
+    void CompleteSend(string identityId, string messageId, string resultJson);
+
+    /// <summary>
     /// Writes a consistent online backup of the database to <paramref name="destinationPath"/>
     /// (G4 — the destination SHOULD be a separate encrypted volume; see deploy/DEPLOYMENT.md).
     /// </summary>

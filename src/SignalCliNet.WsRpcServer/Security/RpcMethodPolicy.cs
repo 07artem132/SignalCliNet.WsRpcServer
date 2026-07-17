@@ -37,6 +37,15 @@ public sealed record RpcMethodPolicy
     /// <summary>Zero-based position of the message-body/text argument (for positional calls).</summary>
     public int TextArgIndex { get; init; } = -1;
 
+    /// <summary>
+    /// Name of the optional idempotency-key (<c>messageId</c>) argument the chokepoint reads for durable
+    /// send-dedup (task 3.3), or <c>null</c> if the method carries none.
+    /// </summary>
+    public string? MessageIdArgName { get; init; }
+
+    /// <summary>Zero-based position of the <c>messageId</c> argument (for positional calls).</summary>
+    public int MessageIdArgIndex { get; init; } = -1;
+
     /// <summary>Which fail-closed outbound filter to apply to the result (read output visibility).</summary>
     public ReadOutputKind Output { get; init; } = ReadOutputKind.None;
 }
