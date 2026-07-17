@@ -53,8 +53,15 @@
 > `example/` — окрема робота (потребує WSS+client-cert клієнта; GUI Avalonia — пізніше).
 
 ## 4. Тести (DoD)
-- [ ] 4.1 Per-code cap блокує підбір; паралельні guesses не обходять cap гонкою (G12)
-- [ ] 4.2 Admin cert-bundle (bootstrap) НЕ у `docker logs`/journald (G5)
-- [ ] 4.3 Не-admin cert/токен на admin-метод → `-32001`
-- [ ] 4.4 Upgraded інстанс: legacy account видно лише admin (G10)
-- [ ] 4.5 Audit-події лягають у лог (лінк бот-девайсу / інвайт / промоушн / revoke)
+- [x] 4.1 Per-code cap блокує підбір; паралельні guesses не обходять cap гонкою (G12)
+- [x] 4.2 Admin cert-bundle (bootstrap) НЕ у `docker logs`/journald (G5)
+- [x] 4.3 Не-admin cert/токен на admin-метод → `-32001`
+- [x] 4.4 Upgraded інстанс: legacy account видно лише admin (G10)
+- [x] 4.5 Audit-події лягають у лог (лінк бот-девайсу / інвайт / промоушн / revoke)
+
+> **Секція 4 (виконано мною через реальний шлях).** `AdminMtlsDodTests` — живий `SecureAdminRpcServer`
+> над провіжненими секретами + справжній `ClientWebSocket` з admin client-cert: createInvite/revokeIdentity
+> over mTLS (audit-подія + VerifyChain); валідний CA-cert БЕЗ admin-mapping → сесія закрита, жодного
+> admin-методу (4.3-mTLS-негатив); G5 — bootstrap не лишає ключ-матеріалу в логах; G10 — legacy-акаунт
+> прив'язаний до admin на першому admin listAccounts; G12 — 16 паралельних redeem під cap → рівно 1
+> переможець. (Не-admin на плейн-порту → `-32001` пінить `AuthzChokepointDispatchTests`.) 438 тестів.
