@@ -20,9 +20,9 @@ This app supplies the concrete subclasses + adapters that wire Signal's facades 
 external clients (any language that speaks WebSocket + JSON-RPC) can send messages, manage accounts, link
 devices, and subscribe to incoming events without implementing HTTP/SSE plumbing.
 
-- Target framework: **net10.0**, `OutputType=Exe`. Assembly version **1.1.0** (in the csproj).
+- Target framework: **net10.0**, `OutputType=Exe`. Assembly version **2.0.0** (in the csproj).
 - Requires **JDK 25** at runtime (signal-cli 0.14.3); the Docker image pulls Temurin 25 automatically.
-- Pinned upstream versions: **SignalCli.NET 4.10.1**, **JSON-RPC.NET 2.7.0**, **SignalCli.Runtime 0.14.3.1**.
+- Pinned upstream versions: **SignalCli.NET 4.10.2**, **JSON-RPC.NET 2.8.0**, **SignalCli.Runtime 0.14.3.1**.
 
 ## Build & run
 
