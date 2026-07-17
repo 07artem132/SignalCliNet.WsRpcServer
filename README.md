@@ -1,5 +1,6 @@
 # 📲 SignalCliNet.WsRpcServer
 
+![Version](https://img.shields.io/badge/version-2.0.0-informational)
 ![License](https://img.shields.io/badge/license-GPLv3-blue.svg)
 ![.NET](https://img.shields.io/badge/.NET-10.0-512BD4)
 ![WebSocket](https://img.shields.io/badge/protocol-WebSocket-brightgreen)
@@ -55,6 +56,50 @@
 
 5. **🔌 Легка інтеграція**  
    Підтримка будь-якої мови програмування, що вміє встановлювати WebSocket-з'єднання й обмінюватися JSON-RPC.
+
+### 🔐 Безпека та shared-bot (Фаза 2/3, від v2.0.0)
+
+Починаючи з **2.0.0** сервер придатний і для **shared-bot**-розгортання (кілька identity за одним
+привʼязаним номером), а не лише для локального loopback-мосту.
+
+> ⚠️ **Усі ці поверхні gated і вимкнені за замовчуванням.** З дефолтною конфігурацією
+> (`Server:Auth:Enabled` / `Server:Admission:Enabled` / `Server:GroupClaim:Enabled` = `false`)
+> поведінка Фази 1 — **loopback, full-access — незмінна**. Вмикати їх свідомо перед публічною
+> експозицією (див. [`docs/self-host.md`](docs/self-host.md) і [`deploy/DEPLOYMENT.md`](deploy/DEPLOYMENT.md)).
+
+6. **🛡️ Default-deny авторизація та ізоляція акаунтів**  
+   Pre-dispatch chokepoint із реєстром політик (метод без політики → `-32601`); дозволені акаунти
+   виводяться з principal, ніколи з аргументів (анти-IDOR); санітизація помилок клієнту;
+   `apiVersion`-negotiation у handshake.
+
+7. **🔑 Автентифікація: opaque-токен + Proof-of-Possession**  
+   Bearer-токен (`ptzh_*`, HMAC-at-rest) через WS-субпротокол + PoP device-ключем ECDSA P-256;
+   in-band `4401`/`4408`; token-renewal; enrollment device-ключа через one-time інвайт.
+
+8. **🚦 Admission-контроль і rate-limits**  
+   Єдина admission-функція (global-pause → floor → new-recipient → бот-бюджет reserve-then-send);
+   per-connection msg-rate/in-flight, per-identity connection cap, idle-timeout; відмови in-band
+   `-32005` (`retry_after`) / WS `4429`.
+
+9. **🎫 Інвайти та окремий mTLS admin-порт**  
+   Sybil-гейт через one-time інвайти; admin-поверхня (`createInvite`/`revokeIdentity`/`listAccounts`)
+   **лише** через окремий mTLS-порт (`wss://127.0.0.1:9443`, client-cert = креденшел);
+   tamper-evident audit hash-chain. Reference-клієнт — [`example/AdminCli`](example/AdminCli).
+
+10. **👥 Group-claim та ізольований receive**  
+    Per-account receive-роутер (own-linked → власнику, shared-bot → сканеру); group-claim флоу
+    (`requestGroupClaim` → код у чат → binding з anchor-перевіркою членства) гейтить групові send'и.
+    Деталі — [`docs/shared-bot.md`](docs/shared-bot.md).
+
+11. **📊 Ops та observability**  
+    App-метрики (без PII), таксономія помилок і реактивний global-pause (анти-бан) на Signal
+    rate-limit/captcha, server-heartbeat, durable idempotency-dedup (at-most-once). Runbook —
+    [`docs/ops-runbook.md`](docs/ops-runbook.md).
+
+12. **💾 Durable-стан і секрети на томі**  
+    Single-instance lockfile (G1), durable SQLite (WAL, integrity-check, backup/restore),
+    авто-генерація CA/cert/пепперів (persist-once, `0600`) — жодних секретів в env. Том **МУСИТЬ**
+    бути платформно-шифрованим (at-rest — відповідальність платформи).
 
 ---
 
@@ -302,9 +347,17 @@ asyncio.run(main())
 
 #### 📱 3. Керування пристроями
 
-- **StartLinkAsync** `{}`
+> ⚠️ **BREAKING у v2.0.0.** Лінкування тепер працює через one-time **`sessionId`**, а не через сирий
+> `deviceLinkUri`: `startLink` повертає `{ sessionId, deviceLinkUri }`, а `finishLink` приймає
+> `{ sessionId, deviceName }`. Сирий URI/QR — чутливий і живе лише в серверному сторі (TTL 120с),
+> клієнт оперує `sessionId`. Точний wire-приклад (camelCase-методи) — у
+> [`deploy/DEPLOYMENT.md` §3](deploy/DEPLOYMENT.md).
 
-  Початок процесу прив'язування нового пристрою (дає URI для QR-коду).
+- **StartLinkAsync** `{ targetAccount?: string }`
+
+  Початок процесу прив'язування нового пристрою: створює one-time link-сесію і повертає `sessionId`
+  разом із `deviceLinkUri` (для QR-коду). Опційний `targetAccount` — hint; лінк на вже привʼязаний
+  спільний бот вимагає admin-principal (захист від takeover).
 
   **Запит**:
   ```json
@@ -321,14 +374,16 @@ asyncio.run(main())
     "jsonrpc": "2.0",
     "id": 4,
     "result": {
-      "DeviceLinkUri": "sgnl://linkdevice?uuid=abcdef&pub_key=BASE64KEY"
+      "sessionId": "BASE64URL_ONE_TIME_ID",
+      "deviceLinkUri": "sgnl://linkdevice?uuid=abcdef&pub_key=BASE64KEY"
     }
   }
   ```
 
-- **FinishLinkAsync** `{ deviceLinkUri: string, deviceName: string }`
+- **FinishLinkAsync** `{ sessionId: string, deviceName: string }`
 
-  Завершення прив'язки пристрою, використовуючи URI та назву.
+  Завершення прив'язки: гасить one-time `sessionId` (а не сирий URI) і реєструє пристрій. Сесія
+  гаситься лише якщо identity збігається з тією, що почала лінк (анти-griefing).
 
   **Запит**:
   ```json
@@ -337,7 +392,7 @@ asyncio.run(main())
     "id": 5,
     "method": "FinishLinkAsync",
     "params": {
-      "deviceLinkUri": "sgnl://linkdevice?uuid=abcdef&pub_key=BASE64KEY",
+      "sessionId": "BASE64URL_ONE_TIME_ID",
       "deviceName": "Мій комп'ютер"
     }
   }
@@ -542,13 +597,12 @@ asyncio.run(main())
 
 ## 🗺️ Дорожня карта
 
-1. **📡 Реалізація підтримки подій**
-    - Підписка на отримання текстових повідомлень, вкладень тощо в реальному часі.
-    - Обробка реакцій, статусів (доставлено/прочитано).
-
-2. **🧪 Юніт-тести**
-    - Перевірка JSON-RPC-інтерфейсу.
-    - Мок-тестування взаємодії з SignalCli.NET.
+- **✅ Фаза 1** — WS JSON-RPC міст, події (`subscribe`/`unsubscribe`), лінкування, юніт-тести.
+- **✅ Фаза 2/3 (v2.0.0)** — авторизація, автентифікація (токен + PoP), admission/rate-limits,
+  інвайти + mTLS admin-порт, group-claim, durable-persistence, ops/observability. Усе gated
+  (див. [✨ Особливості](#-особливості) та [CHANGELOG](CHANGELOG.md)).
+- **🔜 Далі** — розширення events-поверхні (Phase-3 subscribe через per-account роутер),
+  admin GUI (Avalonia).
 
 ---
 
@@ -558,7 +612,7 @@ asyncio.run(main())
 | Бібліотека       | Опис                                                                     |
 |------------------|--------------------------------------------------------------------------|
 | SignalCli.NET    | Базова .NET-бібліотека для взаємодії з `signal-cli`.                      |
-| WatsonWebsocket  | WebSocket-сервер для .NET.                                               |
+| NetCoreServer    | Високопродуктивний WebSocket/TCP-сервер для .NET.                                               |
 | StreamJsonRpc    | Імплементація протоколу JSON-RPC для .NET.                               |
 | Microsoft.Extensions.* | Набір служб .NET для конфігурації, логування, DI-контейнера і хостингу.   |
 

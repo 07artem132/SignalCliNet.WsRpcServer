@@ -58,7 +58,7 @@ CA + server-cert + admin-cert + пеппери (`0600`, persist-once) — жод
 Стан акаунта + durable-стор (`durable.db`) + секрети (`secrets/`) лежать на volume `signalcli-data`.
 **Монтуйте його на платформно-шифрований том** (R3.7/S2): at-rest шифрування — відповідальність
 платформи (KMS-disk / host dm-crypt), НЕ застосунку (app-LUKS у контейнері вимагав би `--privileged`
-— гірша безпека). Це і є привʼязаний пристрій — бекапте його (§6).
+— гірша безпека). Це і є привʼязаний пристрій — бекапте його (§7).
 
 > ⚠️ **Клієнт має довіряти internal-CA.** Витягніть його й додайте у trust-store клієнта/системи:
 > ```bash
@@ -112,22 +112,25 @@ SignalCli__JavaExecutable=/opt/jdk25/bin/java dotnet SignalCliNet.WsRpcServer.dl
 Сервер ще не має акаунта — `listAccounts` повертає `[]`. Привʼязка робиться
 через два JSON-RPC виклики по тому ж WebSocket-каналу.
 
-1. **`startLink`** → повертає `DeviceLinkUri` (рядок `sgnl://linkdevice?...`).
-2. Згенеруйте з цього URI **QR-код** і відскануйте телефоном:
+1. **`startLink`** → повертає `{ sessionId, deviceLinkUri }` (URI — рядок `sgnl://linkdevice?...`).
+2. Згенеруйте з `deviceLinkUri` **QR-код** і відскануйте телефоном:
    Signal → *Налаштування → Привʼязані пристрої → Привʼязати новий пристрій*.
-3. **`finishLink`** з тим самим `deviceLinkUri` і будь-яким `deviceName` →
+3. **`finishLink`** з тим самим `sessionId` (**не** сирим URI) і будь-яким `deviceName` →
    завершує привʼязку, повертає номер.
+
+> ⚠️ **BREAKING у v2.0.0.** `finishLink` тепер приймає one-time `sessionId` зі `startLink`, а не
+> `deviceLinkUri`. Сирий URI/QR — чутливий, живе лише у in-memory сесії (TTL 120с) і не логується.
 
 Приклад (значення method — camelCase, як їх віддає сервер):
 
 ```json
 --> {"jsonrpc":"2.0","id":1,"method":"startLink","params":[]}
-<-- {"jsonrpc":"2.0","id":1,"result":{"deviceLinkUri":"sgnl://linkdevice?uuid=...&pub_key=..."}}
+<-- {"jsonrpc":"2.0","id":1,"result":{"sessionId":"<base64url>","deviceLinkUri":"sgnl://linkdevice?uuid=...&pub_key=..."}}
 
 (сканування QR телефоном)
 
 --> {"jsonrpc":"2.0","id":2,"method":"finishLink",
-     "params":{"deviceLinkUri":"sgnl://linkdevice?uuid=...","deviceName":"notify-bot"}}
+     "params":{"sessionId":"<base64url>","deviceName":"notify-bot"}}
 <-- {"jsonrpc":"2.0","id":2,"result":{"number":"+380XXXXXXXXX"}}
 ```
 
@@ -198,7 +201,52 @@ JSON-RPC 2.0. Основні методи (усі — camelCase):
 
 ---
 
-## 6. Експлуатація
+## 6. Увімкнення Phase-2/3 фіч (shared-bot)
+
+За замовчуванням сервер поводиться як у Фазі 1 (loopback, full-access) — усі shared-bot-поверхні
+**вимкнені**. Щоб віддати бота кільком identity через `wss://`, вмикайте фічі свідомо.
+
+### Прапорці (`appsettings.json` / env)
+
+| Прапорець | Дефолт | Вмикає |
+|---|---|---|
+| `Server:Auth:Enabled` | `false` | token/PoP-автентифікацію (bearer через субпротокол + PoP device-ключем). |
+| `Server:Admission:Enabled` | `false` | admission/rate-limits (бот-бюджет, msg-rate, in-flight, connection cap, idle-timeout). |
+| `Server:GroupClaim:Enabled` | `false` | безперервний авто-receive + group-claim send-gate (`requestGroupClaim`). |
+| `Server:Admin:Enabled` | `true` (loopback) | **окремий mTLS admin-порт** `wss://127.0.0.1:9443` (client-cert = креденшел). |
+| `Server:Heartbeat:Enabled` | `true` | адитивні app-level heartbeat-нотіфи (`<25с`; вимкніть для connect-on-demand MVP). |
+
+> ⚠️ Вмикайте `Server:Admission:Enabled=true` **разом** із `Server:Auth:Enabled=true` — ліміти
+> «на identity» осмислені лише коли identity встановлена автентифікацією. Повна таблиця ключів і
+> лімітів — у [`docs/self-host.md`](../docs/self-host.md); shared-bot-модель — [`docs/shared-bot.md`](../docs/shared-bot.md).
+
+### Порядок bootstrap (shared-bot онбординг)
+
+1. **Провіжн секретів — автоматично.** На first-boot сервер сам генерує на томі (`/data/secrets/`,
+   `0600`, persist-once) CA + server-cert + **admin-cert** + пеппери. Жодних секрет-env.
+2. **Admin-cert уже на томі.** Витягніть bundle для admin-клієнта:
+   ```bash
+   docker compose exec wsrpcserver cat /data/secrets/admin-client.crt > admin-client.crt
+   docker compose exec wsrpcserver cat /data/secrets/admin-client.key > admin-client.key   # СЕКРЕТ
+   docker compose exec wsrpcserver cat /data/secrets/ca.crt          > ca.crt
+   ```
+3. **`createInvite` через mTLS admin-порт** (`wss://127.0.0.1:9443`, client-cert). Reference-клієнт —
+   [`example/AdminCli`](../example/AdminCli):
+   ```bash
+   dotnet run --project example/AdminCli -- invite \
+     --cert admin-client.crt --key admin-client.key --ca ca.crt
+   # → друкує одноразовий код інвайту + термін дії
+   ```
+   Код інвайту — секрет; передайте його новому користувачу out-of-band (не через самого бота).
+4. **Онбординг через `redeemInvite`.** Новий користувач гасить one-time код на плейн-порту
+   (`redeemInvite`) — це реєструє його device-pubkey (TOFU) і видає перший токен. Далі — token/PoP
+   на кожному connect.
+
+> 🔐 Admin-поверхня (`createInvite` / `revokeIdentity` / `listAccounts(all)`) доступна **лише** через
+> mTLS-порт. На плейн-порту (токени) admin-методи недосяжні (chokepoint → `-32001`). НІКОЛИ не
+> публікуйте порт `9443` у мережу без L4-обмеження до довірених джерел (див. §4).
+
+## 7. Експлуатація
 
 - **Оновлення (свідоме downtime-вікно, W15):** через G1 (single-instance) деплой = зупинка старого
   контейнера й запуск нового, а не rolling-update. `docker compose up -d --build` робить саме це;
@@ -237,7 +285,7 @@ docker run --rm -v deploy_signalcli-data:/v -v "$PWD/backup":/b alpine \
 
 ---
 
-## 7. Реліз-бінарники
+## 8. Реліз-бінарники
 
 Крім Docker, кожен GitHub Release (тег `vX.Y.Z`) публікує два **self-contained**
 архіви — окремий `.NET`-рантайм не потрібен, лише розпакувати й запустити:
@@ -249,7 +297,7 @@ docker run --rm -v deploy_signalcli-data:/v -v "$PWD/backup":/b alpine \
 
 ```bash
 # Linux, приклад
-tar -xzf SignalCliNet.WsRpcServer-1.1.0-linux-x64.tar.gz -C /opt/wsrpc
+tar -xzf SignalCliNet.WsRpcServer-2.0.0-linux-x64.tar.gz -C /opt/wsrpc
 cd /opt/wsrpc
 SignalCli__JavaExecutable=/opt/jdk25/bin/java ./SignalCliNet.WsRpcServer
 ```
