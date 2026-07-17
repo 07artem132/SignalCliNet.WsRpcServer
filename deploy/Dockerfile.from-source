@@ -29,6 +29,13 @@ COPY JSON-RPC.NET/ ./JSON-RPC.NET/
 COPY SignalCli.NET/ ./SignalCli.NET/
 COPY SignalCliNet.WsRpcServer/ ./SignalCliNet.WsRpcServer/
 
+# Purge host build artifacts that leaked into the context. The context is the parent of
+# three repos, so a context-root .dockerignore isn't guaranteed; a stale obj/signal-cli
+# makes the runtime pack's Exists-gate skip the signal-cli download and ship a mixed jar
+# set (the 0.14.3+0.14.6 pollution incident, 2026-07-17). Everything is built fresh
+# in-container, so none of these host artifacts are needed.
+RUN find . -type d \( -name obj -o -name bin -o -name .localfeed \) -prune -exec rm -rf {} + 2>/dev/null || true
+
 # Build the local NuGet feed (JSON-RPC.NET + SignalCli.NET core + SignalCli.Runtime).
 ENV JSONRPC_REPO=/src/JSON-RPC.NET
 ENV SIGNALCLI_REPO=/src/SignalCli.NET
