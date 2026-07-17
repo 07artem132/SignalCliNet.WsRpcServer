@@ -44,7 +44,7 @@ public sealed class SignalAdminRpcAdapterTests : IDisposable
         _tokens = new TokenService(new FakePepperProvider(Pepper), _store, _time, NullLogger<TokenService>.Instance);
         _audit = new AuditLogService(_store, _time, NullLogger<AuditLogService>.Instance);
         _adapter = new SignalAdminRpcAdapter(
-            _invites, _tokens, _audit, Options.Create(new AdminOptions()), _time,
+            _invites, _tokens, _audit, _store, Options.Create(new AdminOptions()), _time,
             NullLogger<SignalAdminRpcAdapter>.Instance);
     }
 
@@ -77,7 +77,7 @@ public sealed class SignalAdminRpcAdapterTests : IDisposable
     {
         var options = new AdminOptions { DefaultInviteTtlSeconds = 120, DefaultInviteMaxAttempts = 2 };
         var adapter = new SignalAdminRpcAdapter(
-            _invites, _tokens, _audit, Options.Create(options), _time, NullLogger<SignalAdminRpcAdapter>.Instance);
+            _invites, _tokens, _audit, _store, Options.Create(options), _time, NullLogger<SignalAdminRpcAdapter>.Instance);
         using var _ = SignalCallContext.Enter(Admin());
 
         var response = await adapter.CreateInvite();
@@ -120,6 +120,46 @@ public sealed class SignalAdminRpcAdapterTests : IDisposable
         using var _ = SignalCallContext.Enter(Admin());
         var ex = await Assert.ThrowsAsync<RpcErrorException>(() => _adapter.RevokeIdentity("  "));
         Assert.Equal(JsonRpcErrorCode.InvalidParams, ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task RevokeBinding_AsAdmin_RevokesTargetBinding_AndAudits()
+    {
+        // Ціль-юзер із активним group-binding (як після confirmGroupClaim).
+        _store.UpsertIdentity(new IdentityRecord("u", "user", [], FixedTime));
+        var binding = new GroupBindingRecord(
+            "bind-1", "u", "grp-g", "anchor-aci", FixedTime.AddHours(1), Revoked: false, FixedTime);
+        _store.InsertGroupBinding(binding);
+
+        using var _ = SignalCallContext.Enter(Admin());
+        var response = await _adapter.RevokeBinding("u", "bind-1");
+
+        Assert.True(response.Revoked);
+        Assert.Equal("bind-1", response.BindingId);
+        // Binding у сторі revoked (send-gate тепер відмовить цьому юзеру в grp-g).
+        Assert.True(_store.GetGroupBinding("u", "grp-g")!.Revoked);
+        // Audit-подія admin_binding_revoked, актор = admin, ланцюг цілий.
+        Assert.True(_audit.VerifyChain());
+        Assert.Contains(_store.GetAuditEntries(),
+            e => e.EventType == "admin_binding_revoked" && e.ActorIdentity == "admin");
+    }
+
+    [Fact]
+    public async Task RevokeBinding_UnknownOrForeignBinding_ThrowsInvalidParams()
+    {
+        _store.UpsertIdentity(new IdentityRecord("u", "user", [], FixedTime));
+        _store.UpsertIdentity(new IdentityRecord("other", "user", [], FixedTime));
+        _store.InsertGroupBinding(new GroupBindingRecord(
+            "bind-other", "other", "grp-x", "aci", FixedTime.AddHours(1), Revoked: false, FixedTime));
+
+        using var _ = SignalCallContext.Enter(Admin());
+        // Невідомий bindingId → InvalidParams.
+        var unknown = await Assert.ThrowsAsync<RpcErrorException>(() => _adapter.RevokeBinding("u", "nope"));
+        Assert.Equal(JsonRpcErrorCode.InvalidParams, unknown.ErrorCode);
+        // Чужий binding під іменем іншої identity → ІДЕНТИЧНА помилка (анти-oracle), binding НЕ чіпається.
+        var foreign = await Assert.ThrowsAsync<RpcErrorException>(() => _adapter.RevokeBinding("u", "bind-other"));
+        Assert.Equal(JsonRpcErrorCode.InvalidParams, foreign.ErrorCode);
+        Assert.False(_store.GetGroupBinding("other", "grp-x")!.Revoked);
     }
 
     public void Dispose()

@@ -33,4 +33,18 @@ public interface ISignalAdminRpc : IRpcService
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>An acknowledgement of the revoke.</returns>
     Task<RevokeIdentityResponse> RevokeIdentity(string identityId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Surgically revokes ONE group-binding of another identity (add-invites-admin task 2.4) — the admin
+    /// counterpart of the user's <c>revokeMyBinding</c>. Unlike <see cref="RevokeIdentity"/> (which nukes
+    /// every credential), this invalidates a single <c>(identity, group)</c> claim; the binding MUST belong
+    /// to <paramref name="identityId"/> or the call fails <c>InvalidParams</c> (anti-oracle: unknown and
+    /// foreign binding return the same error). Audited as <c>admin_binding_revoked</c>.
+    /// </summary>
+    /// <param name="identityId">The identity that owns the binding (opaque; never a phone number).</param>
+    /// <param name="bindingId">The group-binding to revoke (opaque).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>An acknowledgement of the revoke.</returns>
+    Task<RevokeBindingResponse> RevokeBinding(
+        string identityId, string bindingId, CancellationToken cancellationToken = default);
 }

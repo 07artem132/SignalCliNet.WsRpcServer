@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using SignalCliNet.WsRpcServer.Deployment;
 using SignalCliNet.WsRpcServer.Interfaces;
 using SignalCliNet.WsRpcServer.Model;
+using SignalCliNet.WsRpcServer.Persistence;
 using SignalCliNet.WsRpcServer.Security;
 using StreamJsonRpc.Protocol;
 using WsRpcServer.Exceptions;
@@ -26,6 +27,7 @@ public sealed class SignalAdminRpcAdapter(
     InviteService inviteService,
     TokenService tokenService,
     AuditLogService auditLog,
+    IDurableStore store,
     IOptions<AdminOptions> adminOptions,
     TimeProvider timeProvider,
     ILogger<SignalAdminRpcAdapter> logger)
@@ -37,6 +39,8 @@ public sealed class SignalAdminRpcAdapter(
     private readonly TokenService _tokenService = tokenService ?? throw new ArgumentNullException(nameof(tokenService));
 
     private readonly AuditLogService _auditLog = auditLog ?? throw new ArgumentNullException(nameof(auditLog));
+
+    private readonly IDurableStore _store = store ?? throw new ArgumentNullException(nameof(store));
 
     private readonly AdminOptions _adminOptions =
         (adminOptions ?? throw new ArgumentNullException(nameof(adminOptions))).Value;
@@ -86,6 +90,35 @@ public sealed class SignalAdminRpcAdapter(
 
         _logger.LogInformation("Admin {Actor}: revoke identity {IdentityId}.", actor, identityId);
         return Task.FromResult(new RevokeIdentityResponse(identityId, Revoked: true));
+    }
+
+    /// <inheritdoc />
+    public Task<RevokeBindingResponse> RevokeBinding(
+        string identityId, string bindingId, CancellationToken cancellationToken = default)
+    {
+        var actor = RequireAdminActor();
+
+        if (string.IsNullOrWhiteSpace(identityId))
+            throw new RpcErrorException(JsonRpcErrorCode.InvalidParams, "identityId cannot be empty.");
+        if (string.IsNullOrWhiteSpace(bindingId))
+            throw new RpcErrorException(JsonRpcErrorCode.InvalidParams, "bindingId cannot be empty.");
+
+        // Ownership-guard: binding МУСИТЬ належати саме вказаній identity — хірургічний revoke ОДНОГО
+        // права чужого юзера (на відміну від revokeIdentity, що нукає всю identity). Немає збігу →
+        // InvalidParams «Binding not found» (анти-oracle: невідомий bindingId і чужий — однакова помилка).
+        var owns = _store.GetGroupBindingsForIdentity(identityId)
+            .Any(b => string.Equals(b.BindingId, bindingId, StringComparison.Ordinal));
+        if (!owns)
+            throw new RpcErrorException(JsonRpcErrorCode.InvalidParams, "Binding not found.");
+
+        _store.RevokeGroupBinding(bindingId);
+
+        // Audit: admin_binding_revoked (актор = admin; деталь = identity+binding — опакові id, не PII/секрети).
+        _auditLog.Append("admin_binding_revoked", actor, $"{identityId}:{bindingId}");
+
+        _logger.LogInformation("Admin {Actor}: revoke binding {BindingId} identity {IdentityId}.",
+            actor, bindingId, identityId);
+        return Task.FromResult(new RevokeBindingResponse(bindingId, Revoked: true));
     }
 
     // Актор — admin identity id з call-context principal'а. На admin-порту principal завжди IsAdmin
