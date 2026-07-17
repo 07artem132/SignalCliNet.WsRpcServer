@@ -3,7 +3,6 @@ using System.Buffers.Text;
 using System.Net;
 using System.Net.WebSockets;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
@@ -177,10 +176,11 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
     }
 
     /// <summary>
-    /// NetCoreServer seam invoked AFTER the 101 response is prepared but BEFORE it is sent (V4/W11). We
-    /// parse the bearer subprotocol + Origin here, echo the non-auth subprotocol (C4), enforce the Origin
-    /// allowlist (C3) and decide whether to complete the upgrade. Returning <c>false</c> cancels the
-    /// upgrade — we must then send the HTTP response ourselves and disconnect.
+    /// NetCoreServer seam invoked during the 101 upgrade (V4/W11). We capture the bearer subprotocol +
+    /// Origin here, enforce the Origin allowlist (C3) and decide whether to complete the upgrade. When the
+    /// upgrade is allowed we delegate to <c>base.OnWsConnecting</c>, which calls
+    /// <see cref="NegotiateSubprotocol"/> and correctly rebuilds the 101 with the echoed subprotocol (C4).
+    /// Returning <c>false</c> cancels the upgrade — we then send the HTTP rejection ourselves and disconnect.
     /// </summary>
     public override bool OnWsConnecting(HttpRequest request, HttpResponse response)
     {
@@ -192,15 +192,16 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
 
         var (subprotocols, origin) = ReadHandshakeHeaders(request);
 
-        // Токен-кандидат = субпротокол із префіксом ptzh_; решта — звичайні субпротоколи.
+        // Токен-кандидат = ПЕРШИЙ субпротокол із префіксом ptzh_. Захоплюємо його тут (ДО апгрейду);
+        // рішення про echo лишається за NegotiateSubprotocol (токен НІКОЛИ не echo-иться).
         string? tokenCandidate = null;
-        string? firstNonTokenProtocol = null;
         foreach (var proto in subprotocols)
         {
             if (proto.StartsWith(TokenFormat.Prefix, StringComparison.Ordinal))
-                tokenCandidate ??= proto;
-            else
-                firstNonTokenProtocol ??= proto;
+            {
+                tokenCandidate = proto;
+                break;
+            }
         }
 
         // REDACT: логуємо лише факти/кількості — НІКОЛИ значення субпротоколу/токена/Origin.
@@ -218,15 +219,6 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
             return false;
         }
 
-        // C4/W11: явний echo ПЕРШОГО не-токен субпротоколу. НІКОЛИ не копіювати весь client-list і
-        // НІКОЛИ не echo-ити токен-елемент — інакше WHATWG-клієнт не досягне open (або витік токена).
-        // NetCoreServer 8.0.7 викликає цей hook ПІСЛЯ response.SetBody() (на відміну від master-гілки
-        // апстріму) — голий SetHeader тут дописав би заголовок ПІСЛЯ порожнього рядка, і він витік би
-        // у WebSocket-потік як сміття-кадр (клієнт бачить "reserved bits set"). Тому перебудовуємо
-        // 101-відповідь повністю, з echo-заголовком у правильному місці (перевірено wire-дампом).
-        if (firstNonTokenProtocol is not null)
-            RebuildUpgradeResponseWithSubprotocol(request, response, firstNonTokenProtocol);
-
         if (tokenCandidate is not null)
         {
             // Токен поданий: НЕ вирішуємо тут (T4 — рішення про 4401 у OnWsConnected, щоб браузер побачив
@@ -238,7 +230,10 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
             }
 
             _pendingToken = tokenCandidate;   // REDACT — не логувати; чистимо в OnWsConnected
-            return true;
+
+            // Дозволяємо апгрейд через базу (2.8.0 seam): вона викличе NegotiateSubprotocol і коректно
+            // перебудує 101 з echo не-токен субпротоколу (C4/W11) — інкапсулює обхід дефекту NetCoreServer.
+            return base.OnWsConnecting(request, response);
         }
 
         // Токена немає взагалі:
@@ -257,7 +252,24 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
             return false;
         }
 
-        return true;
+        return base.OnWsConnecting(request, response);
+    }
+
+    /// <summary>
+    /// Subprotocol-negotiation hook (2.8.0 seam) called by <c>base.OnWsConnecting</c> while it rebuilds the
+    /// 101 response. Echoes the FIRST non-token subprotocol (C4/W11); the token element (prefixed with
+    /// <see cref="TokenFormat.Prefix"/>) is NEVER echoed — echoing it would leak the bearer token into the
+    /// upgrade response. Returns <c>null</c> when only a token (or nothing) was offered.
+    /// </summary>
+    protected override string? NegotiateSubprotocol(IReadOnlyList<string> offered)
+    {
+        foreach (var proto in offered)
+        {
+            if (!proto.StartsWith(TokenFormat.Prefix, StringComparison.Ordinal))
+                return proto;
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -1024,40 +1036,6 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
     private bool IsOriginAllowed(string origin) =>
         _authOptions.AllowedOrigins is { Length: > 0 } allowed &&
         allowed.Any(o => string.Equals(o, origin, StringComparison.OrdinalIgnoreCase));
-
-    // Перебудовує 101-upgrade-відповідь з нуля, вставляючи Sec-WebSocket-Protocol серед заголовків
-    // (див. коментар у OnWsConnecting: у NetCoreServer 8.0.7 hook викликається після SetBody, тож
-    // додати заголовок «зверху» вже неможливо). Sec-WebSocket-Accept перераховуємо за RFC 6455.
-    private static void RebuildUpgradeResponseWithSubprotocol(
-        HttpRequest request, HttpResponse response, string subprotocol)
-    {
-        string? clientKey = null;
-        var count = request.Headers;
-        for (long i = 0; i < count; i++)
-        {
-            var header = request.Header((int)i);
-            if (string.Equals(header.Item1, "Sec-WebSocket-Key", StringComparison.OrdinalIgnoreCase))
-            {
-                clientKey = header.Item2;
-                break;
-            }
-        }
-
-        // Без ключа NetCoreServer сам відхилив би upgrade раніше — сюди не дійде; guard на всяк випадок.
-        if (string.IsNullOrEmpty(clientKey))
-            return;
-
-        var accept = Convert.ToBase64String(System.Security.Cryptography.SHA1.HashData(
-            Encoding.UTF8.GetBytes(clientKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")));
-
-        response.Clear();
-        response.SetBegin(101);
-        response.SetHeader("Connection", "Upgrade");
-        response.SetHeader("Upgrade", "websocket");
-        response.SetHeader("Sec-WebSocket-Accept", accept);
-        response.SetHeader("Sec-WebSocket-Protocol", subprotocol);
-        response.SetBody();
-    }
 
     // Формує HTTP-відмову ДО апгрейду і надсилає її сам (return false = NetCoreServer нічого не шле),
     // потім розриває сокет. Синхронний SendResponse гарантує, що байти пішли до FIN.

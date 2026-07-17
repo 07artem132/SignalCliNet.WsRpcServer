@@ -10,7 +10,7 @@
     </PropertyGroup>
 
     <ItemGroup>
-      <PackageReference Include="JSON-RPC.NET" Version="2.7.0" />
+      <PackageReference Include="JSON-RPC.NET" Version="2.8.0" />
       <!-- Durable-стор (G4/R3.7): embedded SQLite. Microsoft-мейнтейнений провайдер, без відомих CVE;
            10.0.x у лінії net10. Тягне SQLitePCLRaw.bundle_e_sqlite3 (нативний SQLite) — з nuget.org. -->
       <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.10" />
@@ -30,7 +30,7 @@
       <!-- CRC32 для checksum-сегмента opaque-токена (fast-reject малформлених токенів БЕЗ
            звернення до стору й HMAC). Microsoft-мейнтейнений, 10.0.x у лінії net10; з nuget.org. -->
       <PackageReference Include="System.IO.Hashing" Version="10.0.10" />
-      <PackageReference Include="SignalCli.NET" Version="4.10.1" />
+      <PackageReference Include="SignalCli.NET" Version="4.10.2" />
       <PackageReference Include="SignalCli.Runtime" Version="0.14.3.1" />
       <PackageReference Include="StreamJsonRpc" Version="2.25.29" />
       <!-- Закриваємо транзитивну вразливість StreamJsonRpc → MessagePack 2.5.192

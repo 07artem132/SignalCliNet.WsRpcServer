@@ -87,7 +87,7 @@ public sealed class SignalDevicesRpcAdapterTests : IDisposable
     public async Task FinishLink_MapsSessionIdToUri_AndReturnsResponse()
     {
         var h = CreateHarness();
-        h.Facade.Setup(d => d.FinishLinkAsync(Uri, "device", It.IsAny<CancellationToken>()))
+        h.Facade.Setup(d => d.FinishLinkAsync(Uri, "device", It.IsAny<CancellationToken>(), It.IsAny<TimeSpan?>()))
             .ReturnsAsync(new FinishLinkResponse("+10000000003"));
 
         var started = await h.Adapter.StartLink();
@@ -95,7 +95,31 @@ public sealed class SignalDevicesRpcAdapterTests : IDisposable
 
         Assert.Equal("+10000000003", result.Number);
         // Клієнт передав лише sessionId — адаптер підставив справжній URI сесії в upstream.
-        h.Facade.Verify(d => d.FinishLinkAsync(Uri, "device", It.IsAny<CancellationToken>()), Times.Once);
+        h.Facade.Verify(
+            d => d.FinishLinkAsync(Uri, "device", It.IsAny<CancellationToken>(), It.IsAny<TimeSpan?>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task FinishLink_PassesPerCallTimeout_AtLeast130Seconds()
+    {
+        var h = CreateHarness();
+        TimeSpan? capturedTimeout = null;
+        h.Facade
+            .Setup(d => d.FinishLinkAsync(Uri, "dev", It.IsAny<CancellationToken>(), It.IsAny<TimeSpan?>()))
+            .Callback<string, string, CancellationToken, TimeSpan?>(
+                (_, _, _, timeout) => capturedTimeout = timeout)
+            .ReturnsAsync(new FinishLinkResponse("+10000000003"));
+
+        var started = await h.Adapter.StartLink();
+        await h.Adapter.FinishLink(started.SessionId, "dev");
+
+        // W9: адаптер прокидає НЕ-null per-call timeout ≥130с (TTL сесії 120с + запас), щоб ручний скан
+        // QR ≤120с не був убитий глобальним 30с RPC-таймаутом send-шляху (SignalCli.NET 4.10.2 seam).
+        Assert.NotNull(capturedTimeout);
+        Assert.True(
+            capturedTimeout!.Value >= TimeSpan.FromSeconds(130),
+            "per-call timeout finishLink має бути ≥130с (W9)");
     }
 
     [Fact]
@@ -136,7 +160,7 @@ public sealed class SignalDevicesRpcAdapterTests : IDisposable
     public async Task FinishLink_ForeignIdentity_DoesNotConsumeSession()
     {
         var h = CreateHarness();
-        h.Facade.Setup(d => d.FinishLinkAsync(Uri, "dev", It.IsAny<CancellationToken>()))
+        h.Facade.Setup(d => d.FinishLinkAsync(Uri, "dev", It.IsAny<CancellationToken>(), It.IsAny<TimeSpan?>()))
             .ReturnsAsync(new FinishLinkResponse("+10000000003"));
 
         string sessionId;
@@ -191,7 +215,7 @@ public sealed class SignalDevicesRpcAdapterTests : IDisposable
     public async Task FinishLink_NewNumber_CreatesPrivateBindToCaller()
     {
         var h = CreateHarness();
-        h.Facade.Setup(d => d.FinishLinkAsync(Uri, "dev", It.IsAny<CancellationToken>()))
+        h.Facade.Setup(d => d.FinishLinkAsync(Uri, "dev", It.IsAny<CancellationToken>(), It.IsAny<TimeSpan?>()))
             .ReturnsAsync(new FinishLinkResponse("+19998887777"));
 
         using (SignalCallContext.Enter(NonAdmin("id-a")))
@@ -223,7 +247,7 @@ public sealed class SignalDevicesRpcAdapterTests : IDisposable
     {
         var capturing = new CapturingLogger<SignalDevicesRpcAdapter>();
         var h = CreateHarness(capturing);
-        h.Facade.Setup(d => d.FinishLinkAsync(Uri, "dev", It.IsAny<CancellationToken>()))
+        h.Facade.Setup(d => d.FinishLinkAsync(Uri, "dev", It.IsAny<CancellationToken>(), It.IsAny<TimeSpan?>()))
             .ReturnsAsync(new FinishLinkResponse("+19998887777"));
 
         var started = await h.Adapter.StartLink();

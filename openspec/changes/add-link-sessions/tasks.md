@@ -12,13 +12,14 @@
   `FinishLinkResponse.Number` (не за target-hint) → новий номер = приватний bind (R3.5, `IsPrivate=true`);
   вже-прив'язаний чужий акаунт не переписуємо (анти-takeover на рівні стору) + alert. `startLink`/
   `finishLink` лишаються `IdentityOnboarding` у `SignalRpcPolicyRegistry` (політика без змін).
-- [ ] 4. Спайк + впровадження per-call timeout ≥130с для `finishLink` (W9); глобальний 30с не чіпати
-  → **СПАЙК-ВЕРДИКТ: відкладено (upstream-ask).** SignalCli.NET `JsonRpcClient` має єдиний спільний
-  `_requestTimeout` на весь клієнт — per-call CT/timeout-seam відсутній, тож ≥130с для `finishLink` не
-  задати, не бампнувши глобальний таймаут send-шляху. Це вимагає зміни SignalCli.NET upstream (rule #1:
-  не форкати тут) — окремий цикл, відкладено до релізу SignalCli.NET із per-call seam. Стопгап для
-  оператора: `SignalCli:RequestTimeoutSeconds` (`Program.cs`) можна тимчасово підняти глобально.
-  TTL сесії лишається 120с (W9: НЕ звужено під глобальний RPC-таймаут).
+- [x] 4. Спайк + впровадження per-call timeout ≥130с для `finishLink` (W9); глобальний 30с не чіпати
+  → **АДОПТОВАНО:** SignalCli.NET 4.10.2 per-call timeout адоптовано; finishLink проходить ручний скан
+  ≤120с не вбитий глобальним 30с. Апстрім додав `FinishLinkAsync(..., TimeSpan? timeout = null)` (seam
+  `add-per-call-rpc-timeout`), тож обхід знято: `Services/SignalDevicesRpcAdapter.cs` прокидає
+  `TimeSpan.FromSeconds(FinishLinkTimeoutSeconds)` (const 130 = TTL 120с + 10с запас) у `FinishLinkAsync`.
+  Глобальний `SignalCli:RequestTimeoutSeconds` лишається дефолтним (per-call ≥130 замість глобального
+  bump). TTL сесії лишається 120с (W9: НЕ звужено під глобальний RPC-таймаут). Тест:
+  `SignalDevicesRpcAdapterTests.FinishLink_PassesPerCallTimeout_AtLeast130Seconds` (verify НЕ-null ≥130с).
 - [x] 5. One-shot sync після own-number finishLink АБО задокументувати stale listGroups (G7)
   → обрано документування (one-shot receive свідомо НЕ роблено — авто-receive приходить із
   `add-group-claim-receive`). Нотатка у `docs/self-host.md` (розділ Receive-mode, блок «G7»).
@@ -48,8 +49,9 @@
 - [x] 10. Own-number finishLink проходить за ручний скан ≤120с (не вбитий 30с таймаутом)
   → session-TTL рівень: `LinkSessionStoreTests.TryConsume_Expired_ReturnsNull` + happy-path пінять, що
   сесія валідна весь 120с-вікно ручного скану й гасне рівно на TTL. **Транспортний** per-call timeout
-  (щоб finishLink реально блокував ≥120с попри глобальний 30с) — залежить від task 4 (deferred upstream);
-  до нього стопгап — глобальний `RequestTimeoutSeconds`.
+  адоптовано: SignalCli.NET 4.10.2 per-call timeout адоптовано; finishLink проходить ручний скан ≤120с не
+  вбитий глобальним 30с — адаптер прокидає ≥130с per-call timeout у `FinishLinkAsync` (task 4). Тест:
+  `SignalDevicesRpcAdapterTests.FinishLink_PassesPerCallTimeout_AtLeast130Seconds`.
 
 ## Додаткові тести (не в DoD, але покривають архітектуру)
 
@@ -62,6 +64,8 @@
 
 ## Підсумок
 
-Реалізовано tasks 1–3, 5, 6 + DoD 7–10 (10 — на рівні session-TTL). Task 4 — spike-вердикт
-«upstream-ask», відкладено. Повна сюїта зелена: **360** тестів (344 baseline − 3 старі devices-тести
-+ 19 нових).
+Реалізовано tasks 1–6 + DoD 7–10. Task 4 (per-call timeout ≥130с) — спершу spike-вердикт «upstream-ask»,
+згодом **АДОПТОВАНО** після релізу SignalCli.NET 4.10.2 (per-call `FinishLinkAsync(..., TimeSpan? timeout)`
+seam): адаптер прокидає ≥130с per-call timeout, обхід знято, глобальний RPC-таймаут не чіпано. Повна
+сюїта зелена: **360** тестів на момент основного change (344 baseline − 3 старі devices-тести + 19 нових);
+адоптація task 4 додала per-call-timeout-тест у рамках bump-циклу 2.8.0/4.10.2.
