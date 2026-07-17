@@ -5,8 +5,8 @@
         <TargetFramework>net10.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
-        <AssemblyVersion>2.1.0</AssemblyVersion>
-        <FileVersion>2.1.0</FileVersion>
+        <AssemblyVersion>2.2.0</AssemblyVersion>
+        <FileVersion>2.2.0</FileVersion>
     </PropertyGroup>
 
     <ItemGroup>
@@ -30,8 +30,8 @@
       <!-- CRC32 для checksum-сегмента opaque-токена (fast-reject малформлених токенів БЕЗ
            звернення до стору й HMAC). Microsoft-мейнтейнений, 10.0.x у лінії net10; з nuget.org. -->
       <PackageReference Include="System.IO.Hashing" Version="10.0.10" />
-      <PackageReference Include="SignalCli.NET" Version="4.10.2" />
-      <PackageReference Include="SignalCli.Runtime" Version="0.14.3.1" />
+      <PackageReference Include="SignalCli.NET" Version="4.10.3" />
+      <PackageReference Include="SignalCli.Runtime" Version="0.14.6.1" />
       <PackageReference Include="StreamJsonRpc" Version="2.25.29" />
       <!-- Закриваємо транзитивну вразливість StreamJsonRpc → MessagePack 2.5.192
            (GHSA-hv8m-jj95-wg3x / NU1903). 2.5.302 — патчена 2.5.x, і саме її тягне

@@ -5,6 +5,22 @@
 Формат базується на [Keep a Changelog](https://keepachangelog.com/uk/1.1.0/),
 а нумерація версій дотримується [семантичного версіонування](https://semver.org/lang/uk/).
 
+## [2.2.0] — 2026-07-17
+
+### Changed
+
+- **Вхідні повідомлення знову працюють — бандл піднято до signal-cli `0.14.6`.**
+  `SignalCli.NET` `4.10.2` → `4.10.3`, `SignalCli.Runtime` `0.14.3.1` → `0.14.6.1`
+  (signal-cli `0.14.3` → `0.14.6`). Причина — upstream
+  [signal-cli#2059](https://github.com/AsamK/signal-cli/issues/2059): приблизно з 10 червня 2026
+  Signal-сервер перестав слати `serverGuid` у частині **sealed-sender** конвертів, і signal-cli
+  ≤0.14.4.1 дропав **ВСІ** такі вхідні повідомлення з `NullPointerException` у
+  `SignalServiceContent.createFromProto` (надсилання не зачеплене). Проявилось на живому сервері
+  після переходу на `on-start` (2.1.0): дренаж офлайн-беклогу дав 120×`getServerGuid must not be
+  null`. Фікс приземлився в signal-cli 0.14.5; беремо 0.14.6 (latest). JDK-вимога незмінна — **25**.
+  Додатково `SignalCli.NET 4.10.3` робить receive-диспетчер стійким до порожніх нотіфікацій
+  (лог-і-скіп замість NRE-спаму).
+
 ## [2.1.0] — 2026-07-17
 
 ### Changed
