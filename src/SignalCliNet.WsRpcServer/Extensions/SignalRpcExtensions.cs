@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using SignalCli.Models.Signal.Events;
 using SignalCliNet.WsRpcServer.Events;
 using SignalCliNet.WsRpcServer.Interfaces;
@@ -23,8 +24,11 @@ public static class SignalRpcExtensions
     /// </summary>
     public static IServiceCollection AddSignalJsonRpc(
         this IServiceCollection services,
+        IConfiguration configuration,
         Action<JsonRpcServerConfig>? configureOptions = null)
     {
+        ArgumentNullException.ThrowIfNull(configuration);
+
         // Add core JSON-RPC services
         services.AddJsonRpcCore(configureOptions);
 
@@ -36,6 +40,11 @@ public static class SignalRpcExtensions
         // Pre-dispatch authorization chokepoint: декларативний реєстр політик (default-deny),
         // незалежний від авто-дискавері. Singleton — таблиця незмінна на весь час життя процесу.
         services.AddSingleton<IRpcPolicyRegistry, SignalRpcPolicyRegistry>();
+
+        // Authn-core (token store + lifecycle + handshake): пеппер-провайдер, токен-сервіс, TimeProvider,
+        // AuthOptions (Server:Auth), per-IP cap + revoke-фан-аут. Спирається на durable-стор і Persistence-
+        // опції з AddSecureDeployment (реєструється у Program.cs).
+        services.AddAuthnCore(configuration);
 
         // RPC adapters
         services.AddScoped<ISignalAccountsRpc, SignalAccountsRpcAdapter>();

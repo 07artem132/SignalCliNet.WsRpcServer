@@ -13,6 +13,14 @@ namespace SignalCliNet.WsRpcServer.Serialization;
 /// <summary>
 /// Source-generated JSON serialization context for better performance and AOT compatibility
 /// </summary>
+/// <remarks>
+/// A1 (secret-DTO): будь-який тип, доданий сюди [JsonSerializable], серіалізується source-gen-ом. Тому
+/// ЖОДНА серіалізовна властивість не сміє нести секрет (token/secret/signature/pepper/privatekey) без
+/// явного <c>[JsonIgnore]</c> — інакше плейнтекст-секрет витече на дріт. Це пінить guard-тест
+/// <c>SerializerContextSecretGuardTests</c> (рефлексія по зареєстрованих тут типах). Плейнтекст-токени
+/// (authenticate/pop.prove ack) свідомо НЕ проходять через цей серіалізатор — їх пишуть вручну
+/// Utf8JsonWriter-ом у сесії.
+/// </remarks>
 [JsonSourceGenerationOptions(
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,

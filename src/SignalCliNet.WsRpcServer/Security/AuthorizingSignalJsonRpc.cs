@@ -29,6 +29,7 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
     private readonly SignalPrincipal _principal;
     private readonly IRpcPolicyRegistry _policies;
     private readonly ILogger? _logger;
+    private readonly Func<bool>? _isCredentialLive;
 
     /// <summary>
     /// Creates the authorizing JSON-RPC chokepoint.
@@ -37,16 +38,24 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
     /// <param name="principal">The session principal (Phase-1 loopback = full access).</param>
     /// <param name="policies">The declarative policy registry.</param>
     /// <param name="logger">Optional logger for denials (server-side only).</param>
+    /// <param name="isCredentialLive">
+    /// Optional per-dispatch credential liveness check (D9/task 1.5). When supplied, it is invoked before
+    /// policy evaluation on EVERY dispatch; a <c>false</c> result is refused exactly like default-deny
+    /// (sanitized <c>-32601</c>) — so a revoked/expired token session stops dispatching mid-connection.
+    /// <c>null</c> (loopback sessions) preserves the unchanged behaviour.
+    /// </param>
     public AuthorizingSignalJsonRpc(
         IJsonRpcMessageHandler messageHandler,
         SignalPrincipal principal,
         IRpcPolicyRegistry policies,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        Func<bool>? isCredentialLive = null)
         : base(messageHandler)
     {
         _principal = principal ?? throw new ArgumentNullException(nameof(principal));
         _policies = policies ?? throw new ArgumentNullException(nameof(policies));
         _logger = logger;
+        _isCredentialLive = isCredentialLive;
     }
 
     /// <inheritdoc />
@@ -59,6 +68,16 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
         ArgumentNullException.ThrowIfNull(targetMethod);
 
         var method = request.Method ?? string.Empty;
+
+        // 0. Re-чек живучості креденшелу (D9/1.5): ДО політики, на кожен dispatch. Мертвий токен
+        //    (revoked/expired) → та сама відмова, що й default-deny (sanitized -32601) + warning.
+        if (_isCredentialLive is not null && !_isCredentialLive())
+        {
+            _logger?.LogWarning(
+                "Chokepoint: креденшел сесії більше не живий (revoked/expired) — відмова dispatch {Method} (-32601)",
+                method);
+            return Error(request, JsonRpcErrorCode.MethodNotFound, "Method not found.");
+        }
 
         // 1. Герметичний default-deny: метод без явної політики → -32601 ще до виконання тіла.
         var policy = _policies.Resolve(method);

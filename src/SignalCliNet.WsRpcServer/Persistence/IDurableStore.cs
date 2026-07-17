@@ -33,6 +33,33 @@ public interface IDurableStore
     /// <summary>Returns all bindings owned by <paramref name="identityId"/>.</summary>
     IReadOnlyList<AccountBinding> GetBindingsForIdentity(string identityId);
 
+    /// <summary>Inserts a freshly issued access token (its at-rest HMAC is the primary key).</summary>
+    void InsertToken(TokenRecord token);
+
+    /// <summary>Returns the token with <paramref name="tokenHash"/>, or <c>null</c> if absent.</summary>
+    TokenRecord? GetToken(string tokenHash);
+
+    /// <summary>
+    /// Rotates a token atomically (W21 zero-overlap): revokes <paramref name="oldTokenHash"/> and
+    /// inserts <paramref name="newToken"/> in a single transaction.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// <paramref name="oldTokenHash"/> does not exist — a rotation without a predecessor is a logic error.
+    /// </exception>
+    void RotateToken(string oldTokenHash, TokenRecord newToken);
+
+    /// <summary>
+    /// Revokes all of an identity's credentials atomically (task 1.4 cascade): every access token and
+    /// the device secret of <paramref name="identityId"/> are marked revoked in a single transaction.
+    /// </summary>
+    void RevokeIdentityCredentials(string identityId);
+
+    /// <summary>Inserts or updates the device secret for its identity (keyed by identity).</summary>
+    void UpsertDeviceSecret(DeviceSecretRecord secret);
+
+    /// <summary>Returns the device secret for <paramref name="identityId"/>, or <c>null</c> if absent.</summary>
+    DeviceSecretRecord? GetDeviceSecret(string identityId);
+
     /// <summary>
     /// Writes a consistent online backup of the database to <paramref name="destinationPath"/>
     /// (G4 — the destination SHOULD be a separate encrypted volume; see deploy/DEPLOYMENT.md).

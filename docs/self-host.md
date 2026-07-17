@@ -42,6 +42,12 @@ dotnet run --project src/SignalCliNet.WsRpcServer
 | `Server:AllowNonLoopback` | `false` | **D4 fail-closed.** Свідомий opt-in для не-loopback bind. Сервер **відмовиться стартувати** на не-loopback адресі без цього прапорця. Вимагає `Server:Tls:Enabled=true`. |
 | `Server:Tls:Enabled` | `false` | Підтвердження оператора, що TLS сконфігуровано перед сервером (термінація у reverse-proxy). Передумова для не-loopback bind. |
 | `Server:Tls:Hostname` | — | Internal-hostname у SAN авто-згенерованого server-cert (для internal-CA деплою без домену; опційно). |
+| `Server:Auth:Enabled` | `false` | Увімкнути token/PoP-автентифікацію (Фаза 2). Дефолт `false` **зберігає** Фазу-1 loopback-full-access незмінною. |
+| `Server:Auth:TokenTtlHours` | `12` | TTL access-токена, годин (1..168). |
+| `Server:Auth:AuthTimeoutSeconds` | `10` | Скільки браузерна сесія може лишатись неавтентифікованою (чекати fallback `authenticate`) до close `4408` (3..120). |
+| `Server:Auth:MaxUnauthenticatedPerIp` | `8` | Cap одночасних неавтентифікованих сокетів на один IP (1..1024). |
+| `Server:Auth:RenewalPerIdentityPerHour` | `4` | Скільки разів identity може оновити прострочений токен через PoP (T5) за ковзну годину (1..60). Перевищення → renewal тимчасово недоступний (close `4401 expired`). |
+| `Server:Auth:AllowedOrigins` | `[]` | Exact-match allowlist браузерних `Origin` (defense-in-depth, **не** authn). Кожен елемент — абсолютний `scheme://host[:port]` без `/` в кінці (напр. `chrome-extension://<id>`). Порожній список **відхиляє будь-який** Origin (fail-closed); запити без `Origin` (не-браузери) не підпадають під перевірку. |
 | `Persistence:DataDirectory` | `data` | Каталог durable-стану: lockfile (G1), SQLite-стор, авто-згенеровані секрети (CA/cert/пеппери). **МУСИТЬ бути на платформно-шифрованому томі** (R3.7). У контейнері — `/data`. |
 | `SignalCli:LibDirectory` | `signal-cli/lib` | Шлях до signal-cli lib (payload `SignalCli.Runtime`). |
 | `SignalCli:StoragePathCli` | `SignalCliStorageData` | Дані акаунта signal-cli (git-ignored; **не комітити**). |
