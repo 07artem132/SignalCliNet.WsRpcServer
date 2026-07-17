@@ -53,6 +53,9 @@ namespace SignalCliNet.WsRpcServer.Serialization;
 [JsonSerializable(typeof(ListBindingsResponse))]
 [JsonSerializable(typeof(GroupBindingInfo))]
 [JsonSerializable(typeof(RevokeBindingResponse))]
+// add-ops-observability: app-level notification payloads (heartbeat + pause-state) — БЕЗ секретів/PII (A1).
+[JsonSerializable(typeof(HeartbeatNotification))]
+[JsonSerializable(typeof(PauseStateNotification))]
 public partial class SignalCliSerializerContext : JsonSerializerContext
 {
 }

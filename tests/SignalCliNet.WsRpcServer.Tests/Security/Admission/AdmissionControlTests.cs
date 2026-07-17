@@ -156,6 +156,8 @@ public class AdmissionControlTests : IDisposable
     private sealed class PausedGate : IGlobalPauseGate
     {
         public bool IsPaused => true;
+        public int RetryAfterSeconds => 42;
+        public void PauseFor(TimeSpan minimumDuration, string reason) { }
     }
 
     public void Dispose()

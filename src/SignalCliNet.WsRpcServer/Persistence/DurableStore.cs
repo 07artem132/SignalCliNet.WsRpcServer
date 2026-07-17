@@ -1113,6 +1113,99 @@ public sealed class DurableStore : IDurableStore, IDisposable
     }
 
     /// <inheritdoc />
+    public SendDedupRecord? GetSendDedup(string identityId, string messageId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(identityId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
+
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    SELECT status, result_json, budget_reserved, created_at
+                    FROM send_dedup WHERE identity_id = $id AND message_id = $msg;
+                    """;
+                command.Parameters.AddWithValue("$id", identityId);
+                command.Parameters.AddWithValue("$msg", messageId);
+                using var reader = command.ExecuteReader();
+                if (!reader.Read())
+                    return null;
+
+                return new SendDedupRecord(
+                    identityId,
+                    messageId,
+                    reader.GetString(0),
+                    reader.IsDBNull(1) ? null : reader.GetString(1),
+                    reader.GetInt32(2) != 0,
+                    ParseTimestamp(reader.GetString(3)));
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public bool TryBeginSend(string identityId, string messageId, DateTimeOffset now)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(identityId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
+
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                // Атомарний claim: INSERT OR IGNORE + changes(). Виграє рівно один (concurrent/retry →
+                // 0 рядків → false). budget_reserved=1: одиницю бюджету зарезервовано через admission ДО
+                // цього виклику (ordering-i) — прапорець фіксує володіння для crash-форфейт-обліку.
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    INSERT OR IGNORE INTO send_dedup
+                        (identity_id, message_id, status, result_json, budget_reserved, created_at)
+                    VALUES ($id, $msg, $status, NULL, 1, $created);
+                    SELECT changes();
+                    """;
+                command.Parameters.AddWithValue("$id", identityId);
+                command.Parameters.AddWithValue("$msg", messageId);
+                command.Parameters.AddWithValue("$status", SendDedupRecord.StatusPending);
+                command.Parameters.AddWithValue("$created", FormatTimestamp(now));
+                return Convert.ToInt32(command.ExecuteScalar()) == 1;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public void CompleteSend(string identityId, string messageId, string resultJson)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(identityId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
+        ArgumentNullException.ThrowIfNull(resultJson);
+
+        lock (_sync)
+        {
+            WithRetry(() =>
+            {
+                // Умовний перехід pending→done: лише поки status='pending' (resume-гонка не перезапише done).
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    UPDATE send_dedup
+                    SET status = $done, result_json = $json
+                    WHERE identity_id = $id AND message_id = $msg AND status = $pending;
+                    """;
+                command.Parameters.AddWithValue("$done", SendDedupRecord.StatusDone);
+                command.Parameters.AddWithValue("$json", resultJson);
+                command.Parameters.AddWithValue("$id", identityId);
+                command.Parameters.AddWithValue("$msg", messageId);
+                command.Parameters.AddWithValue("$pending", SendDedupRecord.StatusPending);
+                command.ExecuteNonQuery();
+                return 0;
+            });
+        }
+    }
+
+    /// <inheritdoc />
     public void Backup(string destinationPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);

@@ -1,5 +1,11 @@
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using SignalCli.Models.Signal.Message;
+using SignalCliNet.WsRpcServer.Diagnostics;
 using SignalCliNet.WsRpcServer.Security.Admission;
+using SignalCliNet.WsRpcServer.Security.Fail;
+using SignalCliNet.WsRpcServer.Security.Idempotency;
+using SignalCliNet.WsRpcServer.Serialization;
 using StreamJsonRpc;
 using StreamJsonRpc.Protocol;
 using WsRpcServer.Exceptions;
@@ -32,6 +38,8 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
     private readonly ILogger? _logger;
     private readonly Func<bool>? _isCredentialLive;
     private readonly Func<IReadOnlyList<string>, AdmissionDecision>? _admitSends;
+    private readonly Func<string?, IReadOnlyList<string>, IdempotentSendOutcome>? _beginSend;
+    private readonly Action<string, string>? _completeSend;
     private readonly SignalCliGate? _signalCliGate;
     private readonly int _maxInFlight;
     private readonly GroupSendGate? _groupSendGate;
@@ -75,6 +83,18 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
     /// denied group is refused with <c>-32007</c>. <c>null</c> (feature disabled) leaves the send path
     /// unchanged (user-recipient validation + account-guard exactly as before).
     /// </param>
+    /// <param name="beginSend">
+    /// Optional idempotent send coordinator (W16 + T6 dedup, task 3.3). When supplied it SUPERSEDES
+    /// <paramref name="admitSends"/> for send-like methods: it runs the durable dedup-lookup BEFORE
+    /// admission and, on a miss, admission + an atomic <c>pending</c> claim. A dedup <c>done</c> hit
+    /// returns the saved result; a <c>pending</c> hit → <c>-32011</c> (outcome unknown); a denial →
+    /// <c>-32005</c>. <c>null</c> falls back to <paramref name="admitSends"/> (or no admission).
+    /// </param>
+    /// <param name="completeSend">
+    /// Optional completion hook (task 3.3) invoked after a successful keyed send with
+    /// <c>(messageId, resultJson)</c> to mark the dedup row <c>done</c>. Paired with
+    /// <paramref name="beginSend"/>.
+    /// </param>
     public AuthorizingSignalJsonRpc(
         IJsonRpcMessageHandler messageHandler,
         SignalPrincipal principal,
@@ -84,7 +104,9 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
         Func<IReadOnlyList<string>, AdmissionDecision>? admitSends = null,
         SignalCliGate? signalCliGate = null,
         int maxInFlightPerConnection = 0,
-        GroupSendGate? groupSendGate = null)
+        GroupSendGate? groupSendGate = null,
+        Func<string?, IReadOnlyList<string>, IdempotentSendOutcome>? beginSend = null,
+        Action<string, string>? completeSend = null)
         : base(messageHandler)
     {
         _principal = principal ?? throw new ArgumentNullException(nameof(principal));
@@ -92,6 +114,8 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
         _logger = logger;
         _isCredentialLive = isCredentialLive;
         _admitSends = admitSends;
+        _beginSend = beginSend;
+        _completeSend = completeSend;
         _signalCliGate = signalCliGate;
         _maxInFlight = maxInFlightPerConnection;
         _groupSendGate = groupSendGate is { Enabled: true } ? groupSendGate : null;
@@ -174,20 +198,72 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
             }
         }
 
-        // 2b. Admission (W16, tasks 3.2/4.1): ЛИШЕ для send-like методів (політика несе recipients).
-        //     Виконується ПІСЛЯ authz-політики й guard-ів (default-deny перший), ДО dispatch. Deny →
-        //     -32005 з in-band retry_after (S9). recipients витягуємо тим самим шляхом, що й guard (D11).
-        if (_admitSends is not null && policy.RecipientsArgName is not null)
+        // 2b. Admission + idempotency (W16, tasks 3.2/3.3/4.1): ЛИШЕ для send-like методів (політика несе
+        //     recipients). Виконується ПІСЛЯ authz-політики й guard-ів (default-deny перший), ДО dispatch.
+        //     _beginSend (координатор dedup+admission) СУПЕРСЕДИТЬ _admitSends: dedup-lookup ПЕРЕД admission
+        //     (T6). Deny → -32005 (S9). recipients/messageId витягуємо тим самим шляхом, що й guard (D11).
+        var isSendLike = policy.RecipientsArgName is not null;
+        string? pendingMessageId = null;   // set лише коли claim'нуто pending-рядок (треба Complete після send)
+        if (isSendLike && (_beginSend is not null || _admitSends is not null))
         {
-            var recipients = ExtractStringList(request, policy.RecipientsArgName, policy.RecipientsArgIndex);
-            var decision = _admitSends(recipients);
-            if (!decision.Admitted)
+            var recipients = ExtractStringList(request, policy.RecipientsArgName!, policy.RecipientsArgIndex);
+
+            if (_beginSend is not null)
             {
-                // privacy: логуємо лише метод/причину/retry — БЕЗ recipients і тіла.
-                _logger?.LogInformation(
-                    "Chokepoint: send {Method} відхилено admission ({Reason}, retry_after={RetryAfter}s) → -32005",
-                    method, decision.Reason, decision.RetryAfterSeconds);
-                return RateLimitedError(request, decision.RetryAfterSeconds);
+                var messageId = policy.MessageIdArgName is null
+                    ? null
+                    : ExtractString(request, policy.MessageIdArgName, policy.MessageIdArgIndex);
+
+                var outcome = _beginSend(messageId, recipients);
+                switch (outcome.Kind)
+                {
+                    case IdempotentSendKind.DedupDone:
+                        // Idempotency hit done → збережений результат БЕЗ admission/декременту (T6/C2).
+                        _logger?.LogInformation(
+                            "Chokepoint: send {Method} дедупльовано (hit done) → збережений результат.", method);
+                        AppDiagnostics.Send(AppDiagnostics.SendResult.Deduped);
+                        return DedupSavedResult(request, outcome.SavedResultJson);
+
+                    case IdempotentSendKind.OutcomeUnknown:
+                        // Idempotency hit pending (at-most-once, W13): outcome unknown, БЕЗ авто-повтору.
+                        _logger?.LogWarning(
+                            "Chokepoint: send {Method} — idempotency pending, outcome unknown → -32011.", method);
+                        return Error(
+                            request, (JsonRpcErrorCode)FailPathErrorCodes.OutcomeUnknown, FailPathErrorCodes.OutcomeUnknownMessage);
+
+                    case IdempotentSendKind.Denied:
+                        var denied = outcome.Decision!;
+                        _logger?.LogInformation(
+                            "Chokepoint: send {Method} відхилено admission ({Reason}, retry_after={RetryAfter}s) → -32005",
+                            method, denied.Reason, denied.RetryAfterSeconds);
+                        AppDiagnostics.Send(denied.Reason == AdmissionDenyReason.GlobalPause
+                            ? AppDiagnostics.SendResult.Paused
+                            : AppDiagnostics.SendResult.Denied);
+                        return RateLimitedError(request, denied.RetryAfterSeconds);
+
+                    case IdempotentSendKind.AdmittedPending:
+                        pendingMessageId = messageId;   // claim'нуто → Complete після успішного dispatch
+                        break;
+
+                    case IdempotentSendKind.AdmittedFresh:
+                    default:
+                        break;   // допущено без dedup (messageId відсутній) — далі як зазвичай
+                }
+            }
+            else
+            {
+                // Legacy-шлях (без координатора): чиста admission-функція (зворотна сумісність/юніт-тести).
+                var decision = _admitSends!(recipients);
+                if (!decision.Admitted)
+                {
+                    _logger?.LogInformation(
+                        "Chokepoint: send {Method} відхилено admission ({Reason}, retry_after={RetryAfter}s) → -32005",
+                        method, decision.Reason, decision.RetryAfterSeconds);
+                    AppDiagnostics.Send(decision.Reason == AdmissionDenyReason.GlobalPause
+                        ? AppDiagnostics.SendResult.Paused
+                        : AppDiagnostics.SendResult.Denied);
+                    return RateLimitedError(request, decision.RetryAfterSeconds);
+                }
             }
         }
 
@@ -235,6 +311,21 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
                 result.Result = ReadOutputFilter.Filter(policy.Output, _principal, result.Result, _logger);
             }
 
+            // 4b. Send-метрика + idempotency-complete (task 3.3): успішний send-like РЕЗУЛЬТАТ (не error).
+            //     Помилковий/невідомий результат → лишаємо pending-рядок (at-most-once; ретрай → -32011).
+            if (isSendLike && response is JsonRpcResult sendResult)
+            {
+                if (pendingMessageId is not null && _completeSend is not null && sendResult.Result is SendMessageResponse sent)
+                {
+                    // Серіалізуємо збережений результат тим самим source-gen-контекстом → pending→done.
+                    _completeSend(
+                        pendingMessageId,
+                        JsonSerializer.Serialize(sent, SignalCliSerializerContext.Default.SendMessageResponse));
+                }
+
+                AppDiagnostics.Send(AppDiagnostics.SendResult.Ok);
+            }
+
             return response;
         }
         finally
@@ -245,6 +336,16 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
             if (inFlightHeld)
                 Interlocked.Decrement(ref _inFlight);
         }
+    }
+
+    // Idempotency hit done (task 3.3): віддаємо збережений результат першого виклику як JsonRpcResult
+    // (десеріалізований тим самим source-gen-контекстом). Порожній/null JSON → Result=null (defensive).
+    private static JsonRpcResult DedupSavedResult(JsonRpcRequest request, string? savedResultJson)
+    {
+        SendMessageResponse? saved = string.IsNullOrEmpty(savedResultJson)
+            ? null
+            : JsonSerializer.Deserialize(savedResultJson, SignalCliSerializerContext.Default.SendMessageResponse);
+        return new JsonRpcResult { RequestId = request.RequestId, Result = saved };
     }
 
     // Детермінований JSON-RPC -32005 (rate-limit) з in-band retry_after у error.data (A1: без секретів).

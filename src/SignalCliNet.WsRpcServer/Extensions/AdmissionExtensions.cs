@@ -5,6 +5,8 @@ using Microsoft.Extensions.Options;
 using SignalCliNet.WsRpcServer.Deployment;
 using SignalCliNet.WsRpcServer.Security;
 using SignalCliNet.WsRpcServer.Security.Admission;
+using SignalCliNet.WsRpcServer.Security.Fail;
+using SignalCliNet.WsRpcServer.Security.Idempotency;
 
 namespace SignalCliNet.WsRpcServer.Extensions;
 
@@ -40,14 +42,26 @@ public static class AdmissionExtensions
         // Домен-розділений abuse-пеппер (лінива читка pepper_abuse з тому) — окремий ключ від token-пеппера.
         services.TryAddSingleton<IAbusePepperProvider, AbusePepperProvider>();
 
-        // Global-pause заглушка (1.4): no-op до Phase-3 add-ops-observability.
-        services.TryAddSingleton<IGlobalPauseGate, NoopGlobalPauseGate>();
+        // Реактивний global-pause (add-ops-observability, task 2.2): опції Server:Pause (валідовані;
+        // крос-правило Base ≤ Max) + реальний GlobalPauseGate (замінює NoopGlobalPauseGate у DI).
+        services.AddOptionsWithValidateOnStart<GlobalPauseOptions>()
+            .Bind(configuration.GetSection(GlobalPauseOptions.SectionName))
+            .Validate(
+                o => o.BasePauseSeconds <= o.MaxPauseSeconds,
+                "Server:Pause:BasePauseSeconds має бути ≤ MaxPauseSeconds (add-ops-observability, task 2.2).");
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<GlobalPauseOptions>, GlobalPauseOptionsValidator>());
+        services.TryAddSingleton<IGlobalPauseGate, GlobalPauseGate>();
 
         // Лімітери W16-ланцюга + фасад — singletons (атомарний in-memory стан під локом).
         services.TryAddSingleton<ReserveThenSendBudget>();
         services.TryAddSingleton<PerUserQuota>();
         services.TryAddSingleton<NewRecipientTracker>();
         services.TryAddSingleton<AdmissionControl>();
+
+        // Fail-path catch-матриця (task 2.1/2.3) + координатор idempotency+admission (task 3.3) — singletons.
+        services.TryAddSingleton<UpstreamSendFailureMapper>();
+        services.TryAddSingleton<IdempotentSendCoordinator>();
 
         // Транспортні ліміти (task 3.2/3.3): per-identity conn cap + server-wide signal-cli гейт (G6).
         // Обидва — singletons; активні лише коли Enabled=true (сесія/chokepoint передають їх лише тоді).

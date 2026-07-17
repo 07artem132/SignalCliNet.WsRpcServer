@@ -51,6 +51,8 @@ public sealed class SignalRpcPolicyRegistry : IRpcPolicyRegistry
             AccountArgName = "account", AccountArgIndex = 0,
             RecipientsArgName = "recipients", RecipientsArgIndex = 1,
             TextArgName = "message", TextArgIndex = 2,
+            // add-ops-observability (task 3.3): опційний idempotency-key для durable send-dedup.
+            MessageIdArgName = "messageId", MessageIdArgIndex = 3,
         },
         // subscribe(account, eventTypes) — guard account (підписка на події конкретного акаунта).
         new()
