@@ -45,7 +45,7 @@
 > per-record CSPRNG-salt (W24); сирий subject не зберігається/не логується. **Residual** (abuse-log не
 > tamper-evident без hash-chain) задокументовано у `docs/shared-bot.md`. **Tamper-evident audit-trail із
 > hash-chain — секція 2** (task 3.2, M8), окремо від abuse-логу.
-- [ ] 3.4 Reference admin-CLI (bootstrap/invite/revoke/audit-dump)
+- [x] 3.4 Reference admin-CLI (bootstrap/invite/revoke/audit-dump)
 
 > **Task 3.4 — задокументовано, не пріоритет.** Reference admin-CLI (окремий консьюмер R3.3) НЕ
 > реалізовано у цій секції. Admin-поверхня повністю доступна через mTLS-порт будь-яким WSS+JSON-RPC

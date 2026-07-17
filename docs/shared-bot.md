@@ -124,6 +124,39 @@ binding несе **anchorAci** — ACI того, хто вставив код. �
 «ex-member шле в G безстроково». Member-list кешується коротким TTL (~60с) з fail-closed на транзієнт
 (не вдалося визначити членство → відмова send без інвалідизації binding'у).
 
+### Інвалідизація member-cache: чому TTL, а не подія (add-group-claim-receive follow-up)
+
+`GroupMemberCache` покладається на **bounded-staleness ≤ TTL** (дефолт ~60с) плюс **explicit
+`Invalidate(groupId)` на вердикт `NotMember`** (send-відмова вже сталася → скидаємо ентрі, щоб наступна
+перевірка тягнула свіжий список). **Проактивної інвалідизації по group-update подіях НЕМАЄ — і це
+свідомо, не недогляд.**
+
+**Чому не по події.** Upstream `SignalCli.NET` (`ISignalEventService`) сурфейсить рівно ці receive-типи:
+`TextMessages`, `Reaction`, `Attachments`, `Sticker`, `TypingNotifications`, `Receipts`, `Syncs`,
+`Quotes`, `Edits`, `RemoteDeletes`, `PollCreates/Votes/Terminates`, `Payments`, `Pin/UnpinMessages`,
+`AdminDeletes`. **Виділеної «group-update» / «group-membership-change» події серед них немає.** Зміну
+членства групи видно лише як **дискримінатор `JsonDataMessage.GroupInfo.Type`** («тип групової події»)
+на загальному `TextMessages`-потоці — а не як окрему подію. Покладатися на нього для інвалідизації
+означало б:
+
+1. **хардкодити недокументовані upstream-рядки** (`Type` описаний лише як «тип групової події»; значення
+   в XML-контракті не зафіксовані) — крихка прив'язка до внутрішнього формату signal-cli;
+2. **зламати scan-and-drop** приватність receive-шляху: shared-bot події йдуть у сканер, який діє лише
+   на **непорожнє тіло з claim-кодом**; group-update control-envelope несе порожнє тіло і дропається ще
+   до інспекції `Type`;
+3. ризикувати **over-invalidation**: інвалідизація на *кожне* групове повідомлення (`Type=DELIVER`)
+   вбила б кеш і повернула навантаження на signal-cli на кожен send.
+
+Тобто «чистої» події для чистого wire немає, а наявний дискримінатор дав би саме хак/здогадку. Тому
+проактивну інвалідизацію **не** підключено; wire стане тривіальним, якщо upstream колись додасть окрему
+group-membership-change подію — тоді `GroupMemberCache.Invalidate(groupId)` кличеться у SharedBot-гілці
+receive-шляху (`EventProcessor`/`GroupClaimScanner`), gated `Server:GroupClaim:Enabled`.
+
+**Важіль оператора.** Вікно staleness звужується конфігом: **`Server:GroupClaim:MemberCacheTtlSeconds`**
+(діапазон `5..3600`, дефолт `60`). Хто хоче тіснішу межу свіжості членства — ставить менше (ціна —
+частіші `listGroups` до signal-cli). Це прийнятний, чесний механізм: staleness обмежений зверху TTL, а
+`NotMember` скидає ентрі негайно.
+
 ### Delegation-by-proxy — accepted-risk із чесною семантикою (T2)
 
 Код секретний до `U`, one-time, TTL ~10 хв. Вставлення коду **будь-ким** активує binding **самого `U`**
