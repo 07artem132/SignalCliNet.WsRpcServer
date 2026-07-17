@@ -68,6 +68,12 @@ dotnet run --project src/SignalCliNet.WsRpcServer
 | `SignalCli:MaxRestartAttempts` | `3` | Бюджет рестартів демона у вікні. |
 | `SignalCli:HealthCheckIntervalSeconds` | `40` | Період health-ping демона. |
 | `SignalCli:HealthCheckTimeoutSeconds` | `10` | Таймаут health-ping. |
+| `Server:GroupClaim:Enabled` | `false` | **Опт-ін.** Group-claim гейт (`add-group-claim-receive`). `false` ⇒ авто-receive вимкнено (manual/send-only), сканер/роутер/send-gate неактивні — поведінка незмінна. `true` ⇒ безперервний авто-receive + gating групових send'ів claim'ом. |
+| `Server:GroupClaim:ClaimTtlMinutes` | `10` | TTL one-time claim-коду (1..1440). |
+| `Server:GroupClaim:BindingTtlHours` | `720` | Backstop-TTL `(identity, group)` binding-у — форсує періодичний re-claim (1..8760). |
+| `Server:GroupClaim:MaxActiveBindingsPerIdentity` | `20` | Cap активних bindings на identity (footprint D2, 1..1000). Понад → `requestGroupClaim` = `-32008`. |
+| `Server:GroupClaim:ClaimRequestsPerHourPerIdentity` | `10` | Per-identity rate-cap `requestGroupClaim` за ковзну годину (1..1000). Понад → `-32005`. |
+| `Server:GroupClaim:MemberCacheTtlSeconds` | `60` | TTL кешу member-list групи для anchor-перевірки (T2, 5..3600). |
 
 Усе override-иться через environment (`Host.CreateDefaultBuilder`).
 
@@ -127,6 +133,17 @@ in-flight cap, server-wide гейт до signal-cli) — **опт-ін**, як �
   `docs/shared-bot.md`).
 - **`-32602`** (InvalidParams) — порожній / малформ `devicePublicKey` (не валідний P-256 SPKI).
 
+Коди відмов group-claim (зміна `add-group-claim-receive`; діють лише коли `Server:GroupClaim:Enabled=true`):
+
+- **`-32007`** — send у групу через спільного бота відхилено: у caller-identity немає активного
+  `(identity, group)` binding, АБО anchor (вставник коду) більше не член групи (T2). Однакова помилка
+  на обидва випадки (anti-oracle). `error.message` = `"Group send denied: no valid claim for this group."`.
+  Якщо anchor вигнаний — binding при цьому інвалідується (потрібен re-claim).
+- **`-32008`** — `requestGroupClaim` понад per-identity quota активних bindings (дефолт **20**); відкличте
+  зайвий binding (`revokeMyBinding`) і повторіть.
+- **`-32005`** — `requestGroupClaim` понад per-identity rate-cap (дефолт **10/год**); `error.data` несе
+  `retry_after`. `-32601` — group-claim RPC викликано, коли фіча вимкнена (поверхня невидима).
+
 **Рекомендація клієнтам (jittered backoff, G13).** На `-32005`/`4429` не ретрайте одразу й не в унісон.
 Стартуйте з `retry_after` (якщо є) або base = **1с**, множник **2** на кожну наступну відмову, з
 джитером **±50%**, cap **60с**. Приклад: `delay = min(60, base * 2^n) * (0.5 + random()*1.0)`.
@@ -158,18 +175,23 @@ integrity-check (пошкоджена БД → **відмова старту**) 
 (`PRAGMA user_version`). Data-dir захищено exclusive lockfile: **другий процес на тому ж каталозі
 не стартує** (G1, `replicas=1`).
 
-## Receive-mode (send-only MVP)
+## Receive-mode (гейтиться `Server:GroupClaim:Enabled`)
 
-signal-cli стартує у **`--receive-mode=manual`** (send-only) з коробки — `UseManualReceiveMode`
-default = `true`, і сервер його не чіпає. Тобто демон **не** receive-ить вхідні за всі акаунти.
-Це навмисно для send-only MVP. Наслідок: щойно-злінкований власний номер може мати порожній/stale
-`listGroups`, доки не пройде sync через receive (актуально для Фази 2 own-number flow).
+Режим receive **прив'язаний до прапорця group-claim** (R3.1 скасовує send-only передумову V2):
 
-> **G7 (link-sessions, task 5).** Після `finishLink` нового номера `listGroups(account)` може бути
-> **порожнім/stale до першого receive** — link-sessions свідомо НЕ робить one-shot receive/sync.
-> Авто-receive (claim-router, який receive-ить за власними акаунтами) приходить окремою зміною
-> `add-group-claim-receive`; до її мержу групи підтягуються лише коли демон отримає вхідні (напр. після
-> ручного receive або першого повідомлення). Це очікувана поведінка, а не баг.
+- **`Server:GroupClaim:Enabled=false` (дефолт)** — signal-cli стартує у **`--receive-mode=manual`**
+  (`UseManualReceiveMode=true`, send-only). Демон **не** receive-ить вхідні за всі акаунти. Наслідок:
+  щойно-злінкований власний номер може мати порожній/stale `listGroups`, доки не пройде sync через
+  receive. Це очікувана поведінка Фази-1, а не баг.
+- **`Server:GroupClaim:Enabled=true`** — сервер вмикає **безперервний авто-receive**
+  (`--receive-mode=on-start`), бо це потрібно, щоб код-сканер груп-claim матчив коди у вхідному потоці.
+  Head-of-line-ефект спільного stdout-loop (Уточнення-3) знімається **окремим non-blocking споживачем**
+  (сканер) — повільний скан не блокує RPC-відповіді.
+
+> **G7 (link-sessions, task 5).** Коли group-claim вимкнено, після `finishLink` нового номера
+> `listGroups(account)` може бути **порожнім/stale до першого receive** — link-sessions свідомо НЕ робить
+> one-shot receive/sync. З увімкненим group-claim демон receive-ить безперервно, тож групи підтягуються
+> без ручного receive.
 
 ## Контейнер
 

@@ -128,6 +128,34 @@ internal static class SchemaMigrator
                 logged_at      TEXT NOT NULL
             ) STRICT;
             """),
+
+        // v6 (add-group-claim-receive, секція 2): group-claim гейт для (identity, group). One-time
+        // claim-код (group-agnostic при видачі — T3) + (identity, group, anchorAci) binding (T2).
+        // code_hash = at-rest SHA-256 (код сам ≥96-bit секрет, як інвайти); binding несе anchor_aci
+        // (ACI вставника, фіксує сканер) + expires_at (backstop-TTL) + revoked (revoke-каскад/anchor-churn).
+        (6,
+            """
+            CREATE TABLE group_claims (
+                code_hash   TEXT PRIMARY KEY,
+                created_by  TEXT NOT NULL,
+                consumed    INTEGER NOT NULL DEFAULT 0,
+                expires_at  TEXT NOT NULL,
+                created_at  TEXT NOT NULL
+            ) STRICT;
+
+            CREATE TABLE group_bindings (
+                binding_id   TEXT PRIMARY KEY,
+                identity_id  TEXT NOT NULL REFERENCES identities(id) ON DELETE CASCADE,
+                group_id     TEXT NOT NULL,
+                anchor_aci   TEXT NOT NULL,
+                expires_at   TEXT NOT NULL,
+                revoked      INTEGER NOT NULL DEFAULT 0,
+                created_at   TEXT NOT NULL
+            ) STRICT;
+
+            CREATE INDEX ix_group_bindings_identity ON group_bindings(identity_id);
+            CREATE INDEX ix_group_bindings_group ON group_bindings(group_id);
+            """),
     ];
 
     /// <summary>Migrates <paramref name="connection"/> up to <see cref="LatestVersion"/>.</summary>

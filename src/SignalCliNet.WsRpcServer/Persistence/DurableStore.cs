@@ -389,6 +389,17 @@ public sealed class DurableStore : IDurableStore, IDisposable
                     revokeSecret.ExecuteNonQuery();
                 }
 
+                // Каскад на group-bindings (add-group-claim-receive, task 2.4): revoke identity гасить і
+                // її (identity, group) binding-и у ТІЙ САМІЙ транзакції. group_bindings існує з міграції v6.
+                using (var revokeBindings = _connection.CreateCommand())
+                {
+                    revokeBindings.Transaction = transaction;
+                    revokeBindings.CommandText =
+                        "UPDATE group_bindings SET revoked = 1 WHERE identity_id = $identity;";
+                    revokeBindings.Parameters.AddWithValue("$identity", identityId);
+                    revokeBindings.ExecuteNonQuery();
+                }
+
                 transaction.Commit();
                 return 0;
             });
@@ -862,6 +873,244 @@ public sealed class DurableStore : IDurableStore, IDisposable
             ParseTimestamp(reader.GetString(4)),
             reader.IsDBNull(5) ? null : reader.GetString(5),
             ParseTimestamp(reader.GetString(6)));
+
+    /// <inheritdoc />
+    public void InsertGroupClaim(GroupClaimRecord claim)
+    {
+        ArgumentNullException.ThrowIfNull(claim);
+
+        lock (_sync)
+        {
+            WithRetry(() =>
+            {
+                // Прямий INSERT (не OR IGNORE): дубль code_hash = помилка (SqliteException не BUSY/LOCKED,
+                // тож WithRetry його не ковтає — конфлікт спливає викликачу).
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    INSERT INTO group_claims (code_hash, created_by, consumed, expires_at, created_at)
+                    VALUES ($hash, $createdBy, $consumed, $expires, $created);
+                    """;
+                command.Parameters.AddWithValue("$hash", claim.CodeHash);
+                command.Parameters.AddWithValue("$createdBy", claim.CreatedBy);
+                command.Parameters.AddWithValue("$consumed", claim.Consumed ? 1 : 0);
+                command.Parameters.AddWithValue("$expires", FormatTimestamp(claim.ExpiresAt));
+                command.Parameters.AddWithValue("$created", FormatTimestamp(claim.CreatedAt));
+                command.ExecuteNonQuery();
+                return 0;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public GroupClaimRecord? GetGroupClaim(string codeHash)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(codeHash);
+
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    "SELECT created_by, consumed, expires_at, created_at FROM group_claims WHERE code_hash = $hash;";
+                command.Parameters.AddWithValue("$hash", codeHash);
+                using var reader = command.ExecuteReader();
+                if (!reader.Read())
+                    return null;
+
+                return new GroupClaimRecord(
+                    codeHash,
+                    reader.GetString(0),
+                    reader.GetInt32(1) != 0,
+                    ParseTimestamp(reader.GetString(2)),
+                    ParseTimestamp(reader.GetString(3)));
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public bool TryConsumeGroupClaim(string codeHash, DateTimeOffset now)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(codeHash);
+
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                using var transaction = _connection.BeginTransaction();
+
+                // 1. Перечитуємо стан claim-у у транзакції.
+                bool consumed;
+                DateTimeOffset expiresAt;
+                using (var read = _connection.CreateCommand())
+                {
+                    read.Transaction = transaction;
+                    read.CommandText = "SELECT consumed, expires_at FROM group_claims WHERE code_hash = $hash;";
+                    read.Parameters.AddWithValue("$hash", codeHash);
+                    using var reader = read.ExecuteReader();
+                    if (!reader.Read())
+                    {
+                        transaction.Commit();
+                        return false; // невідомий code_hash
+                    }
+
+                    consumed = reader.GetInt32(0) != 0;
+                    expiresAt = ParseTimestamp(reader.GetString(1));
+                }
+
+                // 2. Не redeemable (уже consumed / прострочений) → відмова.
+                if (consumed || expiresAt <= now)
+                {
+                    transaction.Commit();
+                    return false;
+                }
+
+                // 3. Умовний consume: виграє лише той, хто перевів consumed 0→1 (rows-affected==1, W20).
+                int affected;
+                using (var claim = _connection.CreateCommand())
+                {
+                    claim.Transaction = transaction;
+                    claim.CommandText =
+                        "UPDATE group_claims SET consumed = 1 WHERE code_hash = $hash AND consumed = 0;";
+                    claim.Parameters.AddWithValue("$hash", codeHash);
+                    affected = claim.ExecuteNonQuery();
+                }
+
+                transaction.Commit();
+                return affected == 1;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public void InsertGroupBinding(GroupBindingRecord binding)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+
+        lock (_sync)
+        {
+            WithRetry(() =>
+            {
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    INSERT INTO group_bindings
+                        (binding_id, identity_id, group_id, anchor_aci, expires_at, revoked, created_at)
+                    VALUES ($id, $identity, $group, $anchor, $expires, $revoked, $created);
+                    """;
+                command.Parameters.AddWithValue("$id", binding.BindingId);
+                command.Parameters.AddWithValue("$identity", binding.IdentityId);
+                command.Parameters.AddWithValue("$group", binding.GroupId);
+                command.Parameters.AddWithValue("$anchor", binding.AnchorAci);
+                command.Parameters.AddWithValue("$expires", FormatTimestamp(binding.ExpiresAt));
+                command.Parameters.AddWithValue("$revoked", binding.Revoked ? 1 : 0);
+                command.Parameters.AddWithValue("$created", FormatTimestamp(binding.CreatedAt));
+                command.ExecuteNonQuery();
+                return 0;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public GroupBindingRecord? GetGroupBinding(string identityId, string groupId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(identityId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(groupId);
+
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                using var command = _connection.CreateCommand();
+                // Найновіший binding для (identity, group) — re-claim додає новий рядок, беремо останній.
+                command.CommandText =
+                    """
+                    SELECT binding_id, anchor_aci, expires_at, revoked, created_at
+                    FROM group_bindings
+                    WHERE identity_id = $identity AND group_id = $group
+                    ORDER BY created_at DESC LIMIT 1;
+                    """;
+                command.Parameters.AddWithValue("$identity", identityId);
+                command.Parameters.AddWithValue("$group", groupId);
+                using var reader = command.ExecuteReader();
+                if (!reader.Read())
+                    return null;
+
+                return new GroupBindingRecord(
+                    reader.GetString(0), identityId, groupId, reader.GetString(1),
+                    ParseTimestamp(reader.GetString(2)), reader.GetInt32(3) != 0, ParseTimestamp(reader.GetString(4)));
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public IReadOnlyList<GroupBindingRecord> GetGroupBindingsForIdentity(string identityId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(identityId);
+
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                var bindings = new List<GroupBindingRecord>();
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    SELECT binding_id, group_id, anchor_aci, expires_at, revoked, created_at
+                    FROM group_bindings
+                    WHERE identity_id = $identity
+                    ORDER BY created_at DESC;
+                    """;
+                command.Parameters.AddWithValue("$identity", identityId);
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                {
+                    bindings.Add(new GroupBindingRecord(
+                        reader.GetString(0), identityId, reader.GetString(1), reader.GetString(2),
+                        ParseTimestamp(reader.GetString(3)), reader.GetInt32(4) != 0, ParseTimestamp(reader.GetString(5))));
+                }
+
+                return (IReadOnlyList<GroupBindingRecord>)bindings;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public void RevokeGroupBinding(string bindingId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(bindingId);
+
+        lock (_sync)
+        {
+            WithRetry(() =>
+            {
+                using var command = _connection.CreateCommand();
+                command.CommandText = "UPDATE group_bindings SET revoked = 1 WHERE binding_id = $id;";
+                command.Parameters.AddWithValue("$id", bindingId);
+                command.ExecuteNonQuery();
+                return 0;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public void RevokeGroupBindingsForIdentity(string identityId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(identityId);
+
+        lock (_sync)
+        {
+            WithRetry(() =>
+            {
+                using var command = _connection.CreateCommand();
+                command.CommandText = "UPDATE group_bindings SET revoked = 1 WHERE identity_id = $identity;";
+                command.Parameters.AddWithValue("$identity", identityId);
+                command.ExecuteNonQuery();
+                return 0;
+            });
+        }
+    }
 
     /// <inheritdoc />
     public void Backup(string destinationPath)

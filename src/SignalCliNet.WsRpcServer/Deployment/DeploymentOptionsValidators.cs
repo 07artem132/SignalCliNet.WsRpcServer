@@ -27,3 +27,9 @@ internal sealed partial class AuthOptionsValidator : IValidateOptions<AuthOption
 // PerUserFloorPerWindow ≤ AggregateBudgetPerWindow — .Validate(...) у AddAdmissionCore.
 [OptionsValidator]
 internal sealed partial class AdmissionOptionsValidator : IValidateOptions<AdmissionOptions>;
+
+/// <summary>Compile-time validator for <see cref="GroupClaimOptions"/> (DataAnnotations [Range] bounds).</summary>
+// Межові правила (ClaimTtlMinutes 1..1440, BindingTtlHours 1..8760, MaxActiveBindingsPerIdentity 1..1000,
+// ClaimRequestsPerHourPerIdentity 1..1000, MemberCacheTtlSeconds 5..3600) — через [Range]. Крос-правил немає.
+[OptionsValidator]
+internal sealed partial class GroupClaimOptionsValidator : IValidateOptions<GroupClaimOptions>;
