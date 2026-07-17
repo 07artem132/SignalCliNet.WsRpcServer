@@ -62,6 +62,12 @@ public sealed class SignalRpcPolicyRegistry : IRpcPolicyRegistry
         // в адаптері), account-аргумента немає — привілейовані, без per-account guard.
         new() { Method = "unsubscribe", Kind = RpcPolicyKind.AccountCommand },
         new() { Method = "updateSubscription", Kind = RpcPolicyKind.AccountCommand },
+
+        // --- Admin: лише IsAdmin-principal (mTLS admin-порт); не-admin → -32001 (add-invites-admin, 3.1) ---
+        // createInvite(ttlSeconds?, maxAttempts?) — видача one-time інвайту (секрет-код у відповіді).
+        new() { Method = "createInvite", Kind = RpcPolicyKind.Admin },
+        // revokeIdentity(identityId) — каскад revoke токенів+device-секрету identity (change 3).
+        new() { Method = "revokeIdentity", Kind = RpcPolicyKind.Admin },
     ];
 
     private readonly FrozenDictionary<string, RpcMethodPolicy> _byMethod =

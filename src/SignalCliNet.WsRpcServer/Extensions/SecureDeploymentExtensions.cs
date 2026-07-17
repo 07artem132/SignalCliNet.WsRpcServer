@@ -46,6 +46,10 @@ public static class SecureDeploymentExtensions
         // Auto-gen секретів (CA/cert/пеппери) — singleton, викликається зі стартового сервісу.
         services.TryAddSingleton<SecretMaterialProvisioner>();
 
+        // Admin bootstrap (add-invites-admin, task 2.2): ідемпотентна admin-identity + SPKI-mapping
+        // admin-cert-а. Викликається стартовим сервісом після init стору й провіжну секретів.
+        services.TryAddSingleton<AdminBootstrapService>();
+
         // Durable-стор (SQLite на томі) — один concrete-singleton у двох ролях: стартовий сервіс
         // тримає concrete (для Initialize: integrity-check + міграції), консюмери — IDurableStore
         // (тільки дані). ServiceProvider диспоузить його при завершенні хоста.

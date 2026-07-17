@@ -117,6 +117,15 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
             return Error(request, JsonRpcErrorCode.MethodNotFound, "Method not found.");
         }
 
+        // 1b. Admin-гейт (task 3.1): admin-метод для не-admin principal → -32001 (санітизовано, як
+        //     default-deny). Admin-канал — окремий mTLS-порт; на плейн-порту жоден principal не IsAdmin,
+        //     тож admin-методи там завжди відмовляють. Санітизований generic -32001 не розкриває існування.
+        if (policy.Kind == RpcPolicyKind.Admin && !_principal.IsAdmin)
+        {
+            _logger?.LogWarning("Chokepoint: admin-метод {Method} для не-admin principal — відмова (-32001)", method);
+            return Error(request, (JsonRpcErrorCode)AccountIsolationGuard.UnauthorizedErrorCode, "Access denied.");
+        }
+
         // 2. Inbound guards (pre-dispatch): anti-IDOR по account + валідація recipient/тексту (D11).
         //    Відмови кидають RpcErrorException; конвертуємо у детермінований JsonRpcError.
         try

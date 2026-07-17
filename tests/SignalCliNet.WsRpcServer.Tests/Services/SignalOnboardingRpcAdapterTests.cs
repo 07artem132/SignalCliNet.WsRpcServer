@@ -57,8 +57,9 @@ public sealed class SignalOnboardingRpcAdapterTests : IDisposable
             NullLogger<DeviceEnrollmentService>.Instance);
         var abuseLog = new AbuseLogService(
             store, new FakeAbusePepperProvider(), time, NullLogger<AbuseLogService>.Instance);
+        var auditLog = new AuditLogService(store, time, NullLogger<AuditLogService>.Instance);
         var adapter = new SignalOnboardingRpcAdapter(
-            invites, rateLimiter, enrollment, abuseLog, store, time,
+            invites, rateLimiter, enrollment, abuseLog, auditLog, store, time,
             NullLogger<SignalOnboardingRpcAdapter>.Instance);
 
         return new Harness(adapter, invites, tokens, store);

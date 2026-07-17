@@ -106,6 +106,28 @@ internal static class SchemaMigrator
                 logged_at     TEXT NOT NULL
             ) STRICT;
             """),
+
+        // v5 (add-invites-admin, секція 2): admin-креденшели (SPKI mTLS-cert → admin identity, task 2.2)
+        // + tamper-evident audit-trail із hash-chain (task 3.2/M8, окремий від abuse-логу).
+        (5,
+            """
+            CREATE TABLE admin_credentials (
+                spki_sha256  TEXT PRIMARY KEY,
+                identity_id  TEXT NOT NULL REFERENCES identities(id) ON DELETE CASCADE,
+                revoked      INTEGER NOT NULL DEFAULT 0,
+                created_at   TEXT NOT NULL
+            ) STRICT;
+
+            CREATE TABLE audit_log (
+                seq            INTEGER PRIMARY KEY,
+                event_type     TEXT NOT NULL,
+                actor_identity TEXT NOT NULL,
+                detail_hash    TEXT NOT NULL,
+                prev_hash      TEXT NOT NULL,
+                entry_hash     TEXT NOT NULL,
+                logged_at      TEXT NOT NULL
+            ) STRICT;
+            """),
     ];
 
     /// <summary>Migrates <paramref name="connection"/> up to <see cref="LatestVersion"/>.</summary>

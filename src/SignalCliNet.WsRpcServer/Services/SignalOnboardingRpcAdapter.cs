@@ -30,6 +30,7 @@ public sealed class SignalOnboardingRpcAdapter(
     InviteRedemptionRateLimiter rateLimiter,
     DeviceEnrollmentService enrollmentService,
     AbuseLogService abuseLog,
+    AuditLogService auditLog,
     IDurableStore store,
     TimeProvider timeProvider,
     ILogger<SignalOnboardingRpcAdapter> logger)
@@ -57,6 +58,8 @@ public sealed class SignalOnboardingRpcAdapter(
         enrollmentService ?? throw new ArgumentNullException(nameof(enrollmentService));
 
     private readonly AbuseLogService _abuseLog = abuseLog ?? throw new ArgumentNullException(nameof(abuseLog));
+
+    private readonly AuditLogService _auditLog = auditLog ?? throw new ArgumentNullException(nameof(auditLog));
 
     private readonly IDurableStore _store = store ?? throw new ArgumentNullException(nameof(store));
 
@@ -112,6 +115,10 @@ public sealed class SignalOnboardingRpcAdapter(
         // Audit shared-bot: подія invite_redeemed (subject = code_hash, caller = нова identity). W24-хешування
         // й приховування сирого субʼєкта — у AbuseLogService.
         _abuseLog.Record("invite_redeemed", newIdentityId, redemption.CodeHash);
+
+        // Tamper-evident audit-trail (task 3.2): та сама подія у hash-chain лозі (лінк бот-девайсу через
+        // onboarding = нова identity + enrolled device-ключ). Деталь — code_hash (ідентифікатор, не секрет).
+        _auditLog.Append("invite_redeemed", newIdentityId, redemption.CodeHash);
 
         // НЕ логуємо ані код, ані токен — лише факт редемпшну й нову identity.
         _logger.LogInformation("redeemInvite: створено identity {Identity} (емітент {CreatedBy}).",

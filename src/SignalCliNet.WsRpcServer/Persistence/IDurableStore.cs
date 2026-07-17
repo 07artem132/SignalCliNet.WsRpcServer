@@ -120,6 +120,33 @@ public interface IDurableStore
     int AppendAbuseLog(AbuseLogRecord record);
 
     /// <summary>
+    /// Idempotently binds an admin client-cert SPKI to an admin identity (task 2.2). A pre-existing
+    /// <c>spki_sha256</c> is left untouched (preserves its <c>revoked</c> flag) — safe to call on every boot.
+    /// </summary>
+    void UpsertAdminCredential(AdminCredentialRecord credential);
+
+    /// <summary>Returns the admin-credential mapping for <paramref name="spkiSha256"/>, or <c>null</c> if absent.</summary>
+    AdminCredentialRecord? GetAdminCredential(string spkiSha256);
+
+    /// <summary>Marks the admin credential for <paramref name="spkiSha256"/> revoked (no-op if absent; task 2.3).</summary>
+    void RevokeAdminCredential(string spkiSha256);
+
+    /// <summary>
+    /// Appends an entry to the tamper-evident audit-trail (task 3.2/M8). The caller (<c>AuditLogService</c>)
+    /// serializes appends and supplies the already-computed hash-chain fields (seq/prev/entry).
+    /// </summary>
+    /// <exception cref="Microsoft.Data.Sqlite.SqliteException">
+    /// The <c>seq</c> already exists — a chain-integrity violation that MUST surface (never silently succeed).
+    /// </exception>
+    void AppendAuditEntry(AuditLogRecord entry);
+
+    /// <summary>Returns the last (highest-seq) audit entry, or <c>null</c> if the audit-log is empty (genesis).</summary>
+    AuditLogRecord? GetLastAuditEntry();
+
+    /// <summary>Returns every audit entry ordered by <c>seq</c> ascending (for chain verification / admin dump).</summary>
+    IReadOnlyList<AuditLogRecord> GetAuditEntries();
+
+    /// <summary>
     /// Writes a consistent online backup of the database to <paramref name="destinationPath"/>
     /// (G4 — the destination SHOULD be a separate encrypted volume; see deploy/DEPLOYMENT.md).
     /// </summary>

@@ -77,13 +77,22 @@ subject_hmac = base64( HMAC-SHA256( pepper_abuse, salt ‖ callerIdentityId ‖ 
   (equality-oracle): той самий суб'єкт, залогований різними записами або різними акторами, дає РІЗНІ
   hmac, тож спостерігач лог-таблиці не може звірити рівність суб'єктів між записами.
 
-## Residual: abuse-лог НЕ tamper-evident (поки що)
+## Abuse-лог vs audit-trail (два різні логи)
 
-Abuse-лог фіксує подію й приховує суб'єкта, але сам по собі **не** tamper-evident: без hash-chain
-запис у адмін-БД може бути відредагований або видалений без сліду. Це **свідомий залишковий ризик**
-цієї секції.
+Abuse-лог сам по собі **не** tamper-evident: без hash-chain запис у адмін-БД можна відредагувати або
+видалити без сліду. Тому shared-bot має **два окремі** логи з різними цілями:
 
-Tamper-evident **audit-trail** — окремий від abuse-логу лог з ланцюгом хешів (кожен запис зобов'язується
-до попереднього), що робить пост-фактум редагування виявним — це M8 / секція 2 зміни
-`add-invites-admin` (audit-trail), а не ця робота. До її мержу покладатись на abuse-лог як на
-доказ у ворожому середовищі не можна; він — операційний сигнал, не криптографічний доказ.
+- **Abuse-лог** (`abuse_log`, ця секція) — обсяг-throttle domain: W24-HMAC приховує суб'єкта й ламає
+  equality-oracle. Операційний сигнал, не криптографічний доказ. Редагування записів невиявне.
+- **Audit-trail** (`audit_log`, секція 2, M8) — security-домен: **tamper-evident hash-chain**. Кожен
+  запис зобов'язується до попереднього
+  (`entry_hash = SHA-256(prev_hash ‖ seq ‖ event_type ‖ actor ‖ detail_hash ‖ logged_at)`, genesis =
+  нулі), тож підробка/видалення будь-якого запису рве ланцюг (`AuditLogService.VerifyChain()` → `false`).
+  Зберігається лише `detail_hash` (SHA-256 деталей) — жодних токенів/номерів у тілі. Події:
+  лінк бот-девайсу (redeem інвайту), видача інвайту (admin `createInvite`), revoke identity,
+  admin `listAccounts(all)`.
+
+**Резолюція residual секції 1:** tamper-evident audit-trail **реалізовано** у секції 2 (`AuditLogService`
++ міграція `audit_log` v5). Для security-подій, де потрібна доказовість у ворожому середовищі, покладайся
+на audit-trail (hash-chain), а не на abuse-лог. Abuse-лог лишається окремим операційним сигналом для
+обсяг-контролю.

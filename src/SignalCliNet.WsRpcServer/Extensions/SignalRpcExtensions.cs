@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using SignalCli.Models.Signal.Events;
+using SignalCliNet.WsRpcServer.Deployment;
 using SignalCliNet.WsRpcServer.Events;
 using SignalCliNet.WsRpcServer.Interfaces;
 using SignalCliNet.WsRpcServer.Model;
@@ -66,16 +67,28 @@ public static class SignalRpcExtensions
         // контейнером). Дефолт-політику cap винесе секція 2 (конфіг), поки — DefaultMaxPerWindow.
         services.AddSingleton(sp => new InviteRedemptionRateLimiter(sp.GetRequiredService<TimeProvider>()));
 
+        // Admin (add-invites-admin, секція 2): tamper-evident audit-trail (hash-chain, task 3.2), валідовані
+        // AdminOptions (Server:Admin) + mTLS admin-порт. AuditLogService — singleton (єдиний записувач лога).
+        services.AddSingleton<AuditLogService>();
+        services.AddOptionsWithValidateOnStart<AdminOptions>()
+            .Bind(configuration.GetSection(AdminOptions.SectionName))
+            .ValidateDataAnnotations();
+
         // RPC adapters
         services.AddScoped<ISignalAccountsRpc, SignalAccountsRpcAdapter>();
         services.AddScoped<ISignalDevicesRpc, SignalDevicesRpcAdapter>();
         services.AddScoped<ISignalMessageRpc, SignalMessageRpcAdapter>();
         services.AddScoped<ISignalGroupsRpc, SignalGroupsRpcAdapter>();
         services.AddScoped<ISignalOnboardingRpc, SignalOnboardingRpcAdapter>();
+        services.AddScoped<ISignalAdminRpc, SignalAdminRpcAdapter>();
         services.AddScoped<ISystemRpc, SystemRpcAdapter>();
 
-        // Server hosted service
+        // Server hosted service (плейн token-порт)
         services.AddHostedService<SignalRpcHostedService>();
+
+        // mTLS admin-порт (task 2.3) — ОКРЕМИЙ hosted-service. Реєструється ПІСЛЯ плейн-порту й після
+        // AddSecureDeployment (Program.cs) — тож секрети провіжнено й admin-credential bootstrapped до bind-у.
+        services.AddHostedService<SecureAdminRpcHostedService>();
 
         return services;
     }

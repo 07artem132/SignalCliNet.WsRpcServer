@@ -29,6 +29,13 @@ public enum RpcPolicyKind
     /// the result is filtered to what the principal may see (fail-closed).
     /// </summary>
     AccountQuery,
+
+    /// <summary>
+    /// Admin-only operation (add-invites-admin, task 3.1). Requires <see cref="SignalPrincipal.IsAdmin"/>;
+    /// a non-admin principal is refused at the chokepoint with <c>-32001</c> (sanitized, like default-deny).
+    /// The admin channel is the separate mTLS port (cert = credential), never the plain token port.
+    /// </summary>
+    Admin,
 }
 
 /// <summary>
