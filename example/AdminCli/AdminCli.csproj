@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Reference-консьюмер admin-поверхні (add-invites-admin, task 3.4). СВІДОМО поза основним sln
+    (мінімально-інвазивно: не чіпає жодного наявного файлу, не може зламати основну сюїту).
+    Тягне ЛИШЕ StreamJsonRpc з nuget.org — жодного приватного feed / серверних типів
+    (R3.3 generic contract: клієнт спілкується сирим JSON-RPC 2.0, не залежить від DTO сервера).
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <AssemblyName>admin-cli</AssemblyName>
+    <RootNamespace>SignalCliNet.WsRpcServer.Example.AdminCli</RootNamespace>
+    <!-- Приклад лаксовіший щодо аудиту: транзитивний MessagePack (через StreamJsonRpc) не має
+         гейтити reference-проєкт. Основну вразливість усе одно закриваємо піном нижче. -->
+    <NuGetAudit>false</NuGetAudit>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="StreamJsonRpc" Version="2.25.29" />
+    <!-- Пін проти транзитивної вразливості StreamJsonRpc → MessagePack 2.5.192
+         (GHSA-hv8m-jj95-wg3x); дзеркалить основний проєкт. Приклад використовує
+         System.Text.Json-форматтер, не MessagePack — пін лише для чистого restore. -->
+    <PackageReference Include="MessagePack" Version="2.5.302" />
+  </ItemGroup>
+
+</Project>
