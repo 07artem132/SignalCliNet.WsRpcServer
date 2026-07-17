@@ -5,7 +5,7 @@
 Формат базується на [Keep a Changelog](https://keepachangelog.com/uk/1.1.0/),
 а нумерація версій дотримується [семантичного версіонування](https://semver.org/lang/uk/).
 
-## [Unreleased]
+## [2.0.1] — 2026-07-17
 
 ### Added
 
