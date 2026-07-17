@@ -108,7 +108,7 @@
 1. **.NET 10.0** або новіша версія  
    [Завантажити](https://dotnet.microsoft.com/download/dotnet/10.0)
 
-2. **JDK 25+** (signal-cli 0.14.3 потребує class-file 69 = Java 25)  
+2. **JDK 25+** (signal-cli 0.14.6 потребує class-file 69 = Java 25)  
    [Завантажити](https://www.oracle.com/java/technologies/javase-downloads.html)
 
 3. **signal-cli v0.11.3+**  (вже входить як залежність)
