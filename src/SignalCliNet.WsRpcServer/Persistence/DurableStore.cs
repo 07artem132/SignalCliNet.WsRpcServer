@@ -550,6 +550,167 @@ public sealed class DurableStore : IDurableStore, IDisposable
     }
 
     /// <inheritdoc />
+    public void InsertInvite(InviteRecord invite)
+    {
+        ArgumentNullException.ThrowIfNull(invite);
+
+        lock (_sync)
+        {
+            WithRetry(() =>
+            {
+                // Прямий INSERT (не OR IGNORE): дубль code_hash = помилка (SqliteException не є BUSY/LOCKED,
+                // тож WithRetry його не ковтає — конфлікт спливає викликачу).
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    INSERT INTO invites
+                        (code_hash, created_by, consumed, attempt_count, max_attempts, expires_at, consumed_by, created_at)
+                    VALUES ($hash, $createdBy, $consumed, $attempts, $maxAttempts, $expires, $consumedBy, $created);
+                    """;
+                command.Parameters.AddWithValue("$hash", invite.CodeHash);
+                command.Parameters.AddWithValue("$createdBy", invite.CreatedBy);
+                command.Parameters.AddWithValue("$consumed", invite.Consumed ? 1 : 0);
+                command.Parameters.AddWithValue("$attempts", invite.AttemptCount);
+                command.Parameters.AddWithValue("$maxAttempts", invite.MaxAttempts);
+                command.Parameters.AddWithValue("$expires", FormatTimestamp(invite.ExpiresAt));
+                command.Parameters.AddWithValue("$consumedBy", (object?)invite.ConsumedBy ?? DBNull.Value);
+                command.Parameters.AddWithValue("$created", FormatTimestamp(invite.CreatedAt));
+                command.ExecuteNonQuery();
+                return 0;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public InviteRecord? GetInvite(string codeHash)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(codeHash);
+
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    SELECT created_by, consumed, attempt_count, max_attempts, expires_at, consumed_by, created_at
+                    FROM invites WHERE code_hash = $hash;
+                    """;
+                command.Parameters.AddWithValue("$hash", codeHash);
+                using var reader = command.ExecuteReader();
+                if (!reader.Read())
+                    return null;
+
+                return ReadInvite(codeHash, reader);
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public bool TryConsumeInvite(string codeHash, string consumedByIdentityId, DateTimeOffset now)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(codeHash);
+        ArgumentException.ThrowIfNullOrWhiteSpace(consumedByIdentityId);
+
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                using var transaction = _connection.BeginTransaction();
+
+                // 1. Кожна спроба (зокрема невдала) інкрементує лічильник — G12: cap рахує всі guesses.
+                using (var bump = _connection.CreateCommand())
+                {
+                    bump.Transaction = transaction;
+                    bump.CommandText =
+                        "UPDATE invites SET attempt_count = attempt_count + 1 WHERE code_hash = $hash;";
+                    bump.Parameters.AddWithValue("$hash", codeHash);
+                    bump.ExecuteNonQuery();
+                }
+
+                // 2. Перечитуємо стан ПІСЛЯ інкремента (у тій самій транзакції).
+                InviteRecord? invite;
+                using (var read = _connection.CreateCommand())
+                {
+                    read.Transaction = transaction;
+                    read.CommandText =
+                        """
+                        SELECT created_by, consumed, attempt_count, max_attempts, expires_at, consumed_by, created_at
+                        FROM invites WHERE code_hash = $hash;
+                        """;
+                    read.Parameters.AddWithValue("$hash", codeHash);
+                    using var reader = read.ExecuteReader();
+                    invite = reader.Read() ? ReadInvite(codeHash, reader) : null;
+                }
+
+                // 3. Не redeemable? Транзакцію все одно комітимо — інкремент спроби має зберегтися (G12).
+                //    (Невідомий code_hash → bump не змінив рядків, invite==null; коміт — no-op запису.)
+                if (invite is null || invite.Consumed || invite.ExpiresAt <= now || invite.AttemptCount > invite.MaxAttempts)
+                {
+                    transaction.Commit();
+                    return false;
+                }
+
+                // 4. Умовний consume: виграє лише той, хто перевів consumed 0→1 (rows-affected==1).
+                int consumed;
+                using (var claim = _connection.CreateCommand())
+                {
+                    claim.Transaction = transaction;
+                    claim.CommandText =
+                        """
+                        UPDATE invites SET consumed = 1, consumed_by = $id
+                        WHERE code_hash = $hash AND consumed = 0;
+                        """;
+                    claim.Parameters.AddWithValue("$id", consumedByIdentityId);
+                    claim.Parameters.AddWithValue("$hash", codeHash);
+                    consumed = claim.ExecuteNonQuery();
+                }
+
+                transaction.Commit();
+                return consumed == 1;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public int AppendAbuseLog(AbuseLogRecord record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    INSERT INTO abuse_log (event_type, subject_hmac, salt, logged_at)
+                    VALUES ($type, $hmac, $salt, $loggedAt);
+                    SELECT last_insert_rowid();
+                    """;
+                command.Parameters.AddWithValue("$type", record.EventType);
+                command.Parameters.AddWithValue("$hmac", record.SubjectHmac);
+                command.Parameters.AddWithValue("$salt", record.Salt);
+                command.Parameters.AddWithValue("$loggedAt", FormatTimestamp(record.LoggedAt));
+                return Convert.ToInt32(command.ExecuteScalar());
+            });
+        }
+    }
+
+    // Читає InviteRecord із рядка (порядок колонок: created_by, consumed, attempt_count, max_attempts,
+    // expires_at, consumed_by, created_at). code_hash передаємо явно (він у WHERE, не у SELECT-списку).
+    private static InviteRecord ReadInvite(string codeHash, SqliteDataReader reader) =>
+        new(
+            codeHash,
+            reader.GetString(0),
+            reader.GetInt32(1) != 0,
+            reader.GetInt32(2),
+            reader.GetInt32(3),
+            ParseTimestamp(reader.GetString(4)),
+            reader.IsDBNull(5) ? null : reader.GetString(5),
+            ParseTimestamp(reader.GetString(6)));
+
+    /// <inheritdoc />
     public void Backup(string destinationPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);

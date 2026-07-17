@@ -53,14 +53,25 @@ public static class SignalRpcExtensions
 
         // Admission-core (W16 ланцюг: global-pause → per-user quota → new-recipient → aggregate budget):
         // reserve-then-send бюджет, abuse-пеппер, AdmissionOptions (Server:Admission). Опт-ін (Enabled=false
-        // за замовчуванням); спирається на той самий durable-стор.
+        // за замовчуванням); спирається на той самий durable-стор. Реєструє й IAbusePepperProvider, тож
+        // AbuseLogService (нижче) має домен-розділений pepper_abuse незалежно від Admission:Enabled.
         services.AddAdmissionCore(configuration);
+
+        // Онбординг/інвайти (add-invites-admin): InviteService (mint/redeem), AbuseLogService (shared-bot
+        // audit, W24) і soft global rate-cap редемпшну (task 1.2) — singletons (стан/лічильники живуть на
+        // весь процес). TimeProvider/IDurableStore/IAbusePepperProvider беруться з AddAuthnCore/AddAdmissionCore.
+        services.AddSingleton<InviteService>();
+        services.AddSingleton<AbuseLogService>();
+        // Явна фабрика: soft-cap за замовчуванням (не покладаємось на резолв default-значення ctor-параметра
+        // контейнером). Дефолт-політику cap винесе секція 2 (конфіг), поки — DefaultMaxPerWindow.
+        services.AddSingleton(sp => new InviteRedemptionRateLimiter(sp.GetRequiredService<TimeProvider>()));
 
         // RPC adapters
         services.AddScoped<ISignalAccountsRpc, SignalAccountsRpcAdapter>();
         services.AddScoped<ISignalDevicesRpc, SignalDevicesRpcAdapter>();
         services.AddScoped<ISignalMessageRpc, SignalMessageRpcAdapter>();
         services.AddScoped<ISignalGroupsRpc, SignalGroupsRpcAdapter>();
+        services.AddScoped<ISignalOnboardingRpc, SignalOnboardingRpcAdapter>();
         services.AddScoped<ISystemRpc, SystemRpcAdapter>();
 
         // Server hosted service

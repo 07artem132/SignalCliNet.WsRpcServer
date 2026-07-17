@@ -23,9 +23,12 @@ public sealed class SignalRpcPolicyRegistry : IRpcPolicyRegistry
         // handshake — negotiation версії/можливостей контракту (A5); має бути доступним до auth.
         new() { Method = "handshake", Kind = RpcPolicyKind.Public },
 
-        // --- IdentityOnboarding: виконується ДО існування акаунта (лінкування пристрою) ---
+        // --- IdentityOnboarding: виконується ДО існування акаунта (лінкування пристрою / інвайт) ---
         new() { Method = "startLink", Kind = RpcPolicyKind.IdentityOnboarding },
         new() { Method = "finishLink", Kind = RpcPolicyKind.IdentityOnboarding },
+        // redeemInvite — Sybil-гейт онбордингу (add-invites-admin): без токена, rate-limited; створює нову
+        // identity + перший токен. Account-аргумента немає (акаунта ще не існує).
+        new() { Method = "redeemInvite", Kind = RpcPolicyKind.IdentityOnboarding },
 
         // --- AccountQuery: read-вихід фільтрується fail-closed до видимості caller'а ---
         // listAccounts не має account-аргумента; віддає перелік акаунтів демона → фільтр Accounts (R3.5/R3.6).

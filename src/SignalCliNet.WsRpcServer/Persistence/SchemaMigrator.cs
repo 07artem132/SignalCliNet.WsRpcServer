@@ -82,6 +82,30 @@ internal static class SchemaMigrator
                 PRIMARY KEY (identity_id, recipient_hash)
             ) STRICT;
             """),
+
+        // v4 (add-invites-admin): інвайт-гейт (one-time код, per-code attempt cap, атомарний consume —
+        // W20/G12) + shared-bot abuse-лог (домен-розділений HMAC із per-record salt, W24).
+        (4,
+            """
+            CREATE TABLE invites (
+                code_hash        TEXT PRIMARY KEY,
+                created_by       TEXT NOT NULL,
+                consumed         INTEGER NOT NULL DEFAULT 0,
+                attempt_count    INTEGER NOT NULL DEFAULT 0,
+                max_attempts     INTEGER NOT NULL,
+                expires_at       TEXT NOT NULL,
+                consumed_by      TEXT,
+                created_at       TEXT NOT NULL
+            ) STRICT;
+
+            CREATE TABLE abuse_log (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type    TEXT NOT NULL,
+                subject_hmac  TEXT NOT NULL,
+                salt          TEXT NOT NULL,
+                logged_at     TEXT NOT NULL
+            ) STRICT;
+            """),
     ];
 
     /// <summary>Migrates <paramref name="connection"/> up to <see cref="LatestVersion"/>.</summary>
