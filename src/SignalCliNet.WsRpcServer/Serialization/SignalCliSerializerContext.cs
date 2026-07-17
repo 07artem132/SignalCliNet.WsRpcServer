@@ -33,6 +33,7 @@ namespace SignalCliNet.WsRpcServer.Serialization;
 [JsonSerializable(typeof(ListAccountsResponse))]
 [JsonSerializable(typeof(SyncAccountsResponse))]
 [JsonSerializable(typeof(StartLinkResponse))]
+[JsonSerializable(typeof(StartLinkSessionResponse))]
 [JsonSerializable(typeof(FinishLinkResponse))]
 [JsonSerializable(typeof(SendMessageResponse))]
 [JsonSerializable(typeof(TextMessageEventArgs))]

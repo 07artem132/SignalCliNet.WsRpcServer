@@ -41,6 +41,11 @@ public static class SignalRpcExtensions
         // незалежний від авто-дискавері. Singleton — таблиця незмінна на весь час життя процесу.
         services.AddSingleton<IRpcPolicyRegistry, SignalRpcPolicyRegistry>();
 
+        // Link-session стор (add-link-sessions): in-memory one-time сесії лінкування пристрою
+        // (256-bit SessionId, TTL 120с, rate-limit 3/хв/identity). Singleton — стан живе на весь процес;
+        // TimeProvider бере з AddAuthnCore (реєструється нижче), тож порядок реєстрації байдужий (DI-lazy).
+        services.AddSingleton<LinkSessionStore>();
+
         // Authn-core (token store + lifecycle + handshake): пеппер-провайдер, токен-сервіс, TimeProvider,
         // AuthOptions (Server:Auth), per-IP cap + revoke-фан-аут. Спирається на durable-стор і Persistence-
         // опції з AddSecureDeployment (реєструється у Program.cs).
