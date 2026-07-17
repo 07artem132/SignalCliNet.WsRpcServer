@@ -389,6 +389,49 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
         Assert.Equal("pong", result);
     }
 
+    // ---------- 3.1 Admin-політика (add-invites-admin): не-admin → -32001, admin → проходить ----------
+
+    [Fact]
+    public async Task Admin_NonAdminPrincipal_OnAdminMethod_Denied32001_TargetNotReached()
+    {
+        var target = new AdminTarget();
+        // Loopback (IsAdmin=false) — admin-метод має відмовити -32001 ще до виконання тіла.
+        var client = CreatePair(SignalPrincipal.LoopbackFullAccess, target);
+
+        var ex = await Assert.ThrowsAsync<RemoteInvocationException>(
+            () => client.InvokeAsync<string>("createInvite"));
+
+        Assert.Equal(AccountIsolationGuard.UnauthorizedErrorCode, ex.ErrorCode); // -32001
+        Assert.False(target.Invoked, "Не-admin не сміє дійти до admin-адаптера.");
+    }
+
+    [Fact]
+    public async Task Admin_AdminPrincipal_OnAdminMethod_Passes()
+    {
+        var target = new AdminTarget();
+        var admin = new SignalPrincipal("admin", isAdmin: true, hasFullAccess: false, [], []);
+        var client = CreatePair(admin, target);
+
+        var result = await client.InvokeAsync<string>("createInvite");
+
+        Assert.Equal("created", result);
+        Assert.True(target.Invoked);
+    }
+
+    [Fact]
+    public async Task Admin_NonAdmin_OnRevokeIdentity_Denied32001()
+    {
+        var target = new AdminTarget();
+        var user = UserPrincipal(AccountA);
+        var client = CreatePair(user, target);
+
+        var ex = await Assert.ThrowsAsync<RemoteInvocationException>(
+            () => client.InvokeWithParameterObjectAsync<string>("revokeIdentity", new { identityId = "victim" }));
+
+        Assert.Equal(AccountIsolationGuard.UnauthorizedErrorCode, ex.ErrorCode);
+        Assert.False(target.Invoked);
+    }
+
     // ---------- Harness ----------
 
     private static object SendArgs() => new
@@ -539,5 +582,23 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
         // Дзеркалить V8-схему: спільний stateless-таргет читає principal per-invocation з call-context.
         public Task<string> SyncAccount() =>
             Task.FromResult(SignalCallContext.Principal?.Name ?? "(немає principal)");
+    }
+
+    // Admin-таргет (роль SignalAdminRpcAdapter): методи createInvite/revokeIdentity під Admin-політикою.
+    private sealed class AdminTarget
+    {
+        public bool Invoked { get; private set; }
+
+        public Task<string> CreateInvite()
+        {
+            Invoked = true;
+            return Task.FromResult("created");
+        }
+
+        public Task<string> RevokeIdentity(string identityId)
+        {
+            Invoked = true;
+            return Task.FromResult(identityId);
+        }
     }
 }

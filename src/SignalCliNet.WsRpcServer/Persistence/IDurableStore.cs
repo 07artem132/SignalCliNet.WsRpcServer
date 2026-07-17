@@ -89,6 +89,64 @@ public interface IDurableStore
     void UpsertKnownRecipient(string identityId, string recipientHash, DateTimeOffset firstSeen);
 
     /// <summary>
+    /// Inserts a freshly issued one-time invite (its at-rest code hash is the primary key; add-invites-admin).
+    /// </summary>
+    /// <exception cref="Microsoft.Data.Sqlite.SqliteException">
+    /// The <c>code_hash</c> already exists — a duplicate invite, which MUST surface as an error.
+    /// </exception>
+    void InsertInvite(InviteRecord invite);
+
+    /// <summary>Returns the invite with <paramref name="codeHash"/>, or <c>null</c> if absent.</summary>
+    InviteRecord? GetInvite(string codeHash);
+
+    /// <summary>
+    /// Atomically records a redeem attempt against <paramref name="codeHash"/> and, if the invite is still
+    /// redeemable, consumes it for <paramref name="consumedByIdentityId"/> — all in ONE transaction (W20/G12).
+    /// </summary>
+    /// <remarks>
+    /// У одній транзакції: (1) <c>attempt_count += 1</c> (кожна спроба, зокрема невдала, рахується — G12);
+    /// (2) перечитуємо; якщо інвайт відсутній / прострочений / уже consumed / attempt_count &gt; max_attempts
+    /// → повертаємо <c>false</c> (attempt уже інкрементнутий); (3) інакше conditional
+    /// <c>UPDATE … SET consumed=1 WHERE consumed=0</c> — rows-affected==1 виграє (true), програна гонка → false.
+    /// Уся логіка під транзакцією: паралельні guesses не обходять cap.
+    /// </remarks>
+    /// <param name="codeHash">At-rest hash of the presented code.</param>
+    /// <param name="consumedByIdentityId">The identity that redeems the invite on success.</param>
+    /// <param name="now">Current time (for the expiry check).</param>
+    /// <returns><c>true</c> if this call consumed the invite; otherwise <c>false</c>.</returns>
+    bool TryConsumeInvite(string codeHash, string consumedByIdentityId, DateTimeOffset now);
+
+    /// <summary>Appends an abuse-log record (task 3.3) and returns its rowid.</summary>
+    int AppendAbuseLog(AbuseLogRecord record);
+
+    /// <summary>
+    /// Idempotently binds an admin client-cert SPKI to an admin identity (task 2.2). A pre-existing
+    /// <c>spki_sha256</c> is left untouched (preserves its <c>revoked</c> flag) — safe to call on every boot.
+    /// </summary>
+    void UpsertAdminCredential(AdminCredentialRecord credential);
+
+    /// <summary>Returns the admin-credential mapping for <paramref name="spkiSha256"/>, or <c>null</c> if absent.</summary>
+    AdminCredentialRecord? GetAdminCredential(string spkiSha256);
+
+    /// <summary>Marks the admin credential for <paramref name="spkiSha256"/> revoked (no-op if absent; task 2.3).</summary>
+    void RevokeAdminCredential(string spkiSha256);
+
+    /// <summary>
+    /// Appends an entry to the tamper-evident audit-trail (task 3.2/M8). The caller (<c>AuditLogService</c>)
+    /// serializes appends and supplies the already-computed hash-chain fields (seq/prev/entry).
+    /// </summary>
+    /// <exception cref="Microsoft.Data.Sqlite.SqliteException">
+    /// The <c>seq</c> already exists — a chain-integrity violation that MUST surface (never silently succeed).
+    /// </exception>
+    void AppendAuditEntry(AuditLogRecord entry);
+
+    /// <summary>Returns the last (highest-seq) audit entry, or <c>null</c> if the audit-log is empty (genesis).</summary>
+    AuditLogRecord? GetLastAuditEntry();
+
+    /// <summary>Returns every audit entry ordered by <c>seq</c> ascending (for chain verification / admin dump).</summary>
+    IReadOnlyList<AuditLogRecord> GetAuditEntries();
+
+    /// <summary>
     /// Writes a consistent online backup of the database to <paramref name="destinationPath"/>
     /// (G4 — the destination SHOULD be a separate encrypted volume; see deploy/DEPLOYMENT.md).
     /// </summary>

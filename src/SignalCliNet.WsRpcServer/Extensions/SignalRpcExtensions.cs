@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using SignalCli.Models.Signal.Events;
+using SignalCliNet.WsRpcServer.Deployment;
 using SignalCliNet.WsRpcServer.Events;
 using SignalCliNet.WsRpcServer.Interfaces;
 using SignalCliNet.WsRpcServer.Model;
@@ -53,18 +54,41 @@ public static class SignalRpcExtensions
 
         // Admission-core (W16 ланцюг: global-pause → per-user quota → new-recipient → aggregate budget):
         // reserve-then-send бюджет, abuse-пеппер, AdmissionOptions (Server:Admission). Опт-ін (Enabled=false
-        // за замовчуванням); спирається на той самий durable-стор.
+        // за замовчуванням); спирається на той самий durable-стор. Реєструє й IAbusePepperProvider, тож
+        // AbuseLogService (нижче) має домен-розділений pepper_abuse незалежно від Admission:Enabled.
         services.AddAdmissionCore(configuration);
+
+        // Онбординг/інвайти (add-invites-admin): InviteService (mint/redeem), AbuseLogService (shared-bot
+        // audit, W24) і soft global rate-cap редемпшну (task 1.2) — singletons (стан/лічильники живуть на
+        // весь процес). TimeProvider/IDurableStore/IAbusePepperProvider беруться з AddAuthnCore/AddAdmissionCore.
+        services.AddSingleton<InviteService>();
+        services.AddSingleton<AbuseLogService>();
+        // Явна фабрика: soft-cap за замовчуванням (не покладаємось на резолв default-значення ctor-параметра
+        // контейнером). Дефолт-політику cap винесе секція 2 (конфіг), поки — DefaultMaxPerWindow.
+        services.AddSingleton(sp => new InviteRedemptionRateLimiter(sp.GetRequiredService<TimeProvider>()));
+
+        // Admin (add-invites-admin, секція 2): tamper-evident audit-trail (hash-chain, task 3.2), валідовані
+        // AdminOptions (Server:Admin) + mTLS admin-порт. AuditLogService — singleton (єдиний записувач лога).
+        services.AddSingleton<AuditLogService>();
+        services.AddOptionsWithValidateOnStart<AdminOptions>()
+            .Bind(configuration.GetSection(AdminOptions.SectionName))
+            .ValidateDataAnnotations();
 
         // RPC adapters
         services.AddScoped<ISignalAccountsRpc, SignalAccountsRpcAdapter>();
         services.AddScoped<ISignalDevicesRpc, SignalDevicesRpcAdapter>();
         services.AddScoped<ISignalMessageRpc, SignalMessageRpcAdapter>();
         services.AddScoped<ISignalGroupsRpc, SignalGroupsRpcAdapter>();
+        services.AddScoped<ISignalOnboardingRpc, SignalOnboardingRpcAdapter>();
+        services.AddScoped<ISignalAdminRpc, SignalAdminRpcAdapter>();
         services.AddScoped<ISystemRpc, SystemRpcAdapter>();
 
-        // Server hosted service
+        // Server hosted service (плейн token-порт)
         services.AddHostedService<SignalRpcHostedService>();
+
+        // mTLS admin-порт (task 2.3) — ОКРЕМИЙ hosted-service. Реєструється ПІСЛЯ плейн-порту й після
+        // AddSecureDeployment (Program.cs) — тож секрети провіжнено й admin-credential bootstrapped до bind-у.
+        services.AddHostedService<SecureAdminRpcHostedService>();
 
         return services;
     }

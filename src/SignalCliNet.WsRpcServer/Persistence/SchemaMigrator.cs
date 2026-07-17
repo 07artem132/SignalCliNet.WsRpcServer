@@ -82,6 +82,52 @@ internal static class SchemaMigrator
                 PRIMARY KEY (identity_id, recipient_hash)
             ) STRICT;
             """),
+
+        // v4 (add-invites-admin): інвайт-гейт (one-time код, per-code attempt cap, атомарний consume —
+        // W20/G12) + shared-bot abuse-лог (домен-розділений HMAC із per-record salt, W24).
+        (4,
+            """
+            CREATE TABLE invites (
+                code_hash        TEXT PRIMARY KEY,
+                created_by       TEXT NOT NULL,
+                consumed         INTEGER NOT NULL DEFAULT 0,
+                attempt_count    INTEGER NOT NULL DEFAULT 0,
+                max_attempts     INTEGER NOT NULL,
+                expires_at       TEXT NOT NULL,
+                consumed_by      TEXT,
+                created_at       TEXT NOT NULL
+            ) STRICT;
+
+            CREATE TABLE abuse_log (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type    TEXT NOT NULL,
+                subject_hmac  TEXT NOT NULL,
+                salt          TEXT NOT NULL,
+                logged_at     TEXT NOT NULL
+            ) STRICT;
+            """),
+
+        // v5 (add-invites-admin, секція 2): admin-креденшели (SPKI mTLS-cert → admin identity, task 2.2)
+        // + tamper-evident audit-trail із hash-chain (task 3.2/M8, окремий від abuse-логу).
+        (5,
+            """
+            CREATE TABLE admin_credentials (
+                spki_sha256  TEXT PRIMARY KEY,
+                identity_id  TEXT NOT NULL REFERENCES identities(id) ON DELETE CASCADE,
+                revoked      INTEGER NOT NULL DEFAULT 0,
+                created_at   TEXT NOT NULL
+            ) STRICT;
+
+            CREATE TABLE audit_log (
+                seq            INTEGER PRIMARY KEY,
+                event_type     TEXT NOT NULL,
+                actor_identity TEXT NOT NULL,
+                detail_hash    TEXT NOT NULL,
+                prev_hash      TEXT NOT NULL,
+                entry_hash     TEXT NOT NULL,
+                logged_at      TEXT NOT NULL
+            ) STRICT;
+            """),
     ];
 
     /// <summary>Migrates <paramref name="connection"/> up to <see cref="LatestVersion"/>.</summary>

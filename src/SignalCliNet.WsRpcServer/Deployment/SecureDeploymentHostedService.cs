@@ -21,6 +21,7 @@ public sealed class SecureDeploymentHostedService(
     IOptions<TransportSecurityOptions> transportOptions,
     SecretMaterialProvisioner secretProvisioner,
     DurableStore durableStore,
+    AdminBootstrapService adminBootstrap,
     ILogger<SecureDeploymentHostedService> logger)
     : IHostedService, IDisposable
 {
@@ -35,6 +36,9 @@ public sealed class SecureDeploymentHostedService(
 
     private readonly DurableStore _durableStore =
         durableStore ?? throw new ArgumentNullException(nameof(durableStore));
+
+    private readonly AdminBootstrapService _adminBootstrap =
+        adminBootstrap ?? throw new ArgumentNullException(nameof(adminBootstrap));
 
     private readonly ILogger<SecureDeploymentHostedService> _logger =
         logger ?? throw new ArgumentNullException(nameof(logger));
@@ -66,8 +70,12 @@ public sealed class SecureDeploymentHostedService(
             "Секрети готові на томі (CA/server/admin cert + пеппери); каталог: {SecretsDir}",
             Path.GetDirectoryName(secrets.CaCertificatePath));
 
-        // Durable-стор: відкриття + integrity-check (corrupt → fail-start) + міграції (G4).
+        // Durable-стор: відкриття + integrity-check (corrupt → fail-start) + міграції (G4, тепер до v5).
         _durableStore.Initialize();
+
+        // Admin bootstrap (task 2.2): ідемпотентно admin-identity + SPKI-mapping admin-cert-а. Після
+        // init стору (потрібні таблиці v5) і після провіжну (потрібен admin-cert на томі). G5: без матеріалу.
+        _adminBootstrap.Bootstrap(secrets.AdminClientCertificatePath);
 
         return Task.CompletedTask;
     }

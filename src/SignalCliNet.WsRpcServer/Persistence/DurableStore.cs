@@ -550,6 +550,320 @@ public sealed class DurableStore : IDurableStore, IDisposable
     }
 
     /// <inheritdoc />
+    public void InsertInvite(InviteRecord invite)
+    {
+        ArgumentNullException.ThrowIfNull(invite);
+
+        lock (_sync)
+        {
+            WithRetry(() =>
+            {
+                // Прямий INSERT (не OR IGNORE): дубль code_hash = помилка (SqliteException не є BUSY/LOCKED,
+                // тож WithRetry його не ковтає — конфлікт спливає викликачу).
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    INSERT INTO invites
+                        (code_hash, created_by, consumed, attempt_count, max_attempts, expires_at, consumed_by, created_at)
+                    VALUES ($hash, $createdBy, $consumed, $attempts, $maxAttempts, $expires, $consumedBy, $created);
+                    """;
+                command.Parameters.AddWithValue("$hash", invite.CodeHash);
+                command.Parameters.AddWithValue("$createdBy", invite.CreatedBy);
+                command.Parameters.AddWithValue("$consumed", invite.Consumed ? 1 : 0);
+                command.Parameters.AddWithValue("$attempts", invite.AttemptCount);
+                command.Parameters.AddWithValue("$maxAttempts", invite.MaxAttempts);
+                command.Parameters.AddWithValue("$expires", FormatTimestamp(invite.ExpiresAt));
+                command.Parameters.AddWithValue("$consumedBy", (object?)invite.ConsumedBy ?? DBNull.Value);
+                command.Parameters.AddWithValue("$created", FormatTimestamp(invite.CreatedAt));
+                command.ExecuteNonQuery();
+                return 0;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public InviteRecord? GetInvite(string codeHash)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(codeHash);
+
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    SELECT created_by, consumed, attempt_count, max_attempts, expires_at, consumed_by, created_at
+                    FROM invites WHERE code_hash = $hash;
+                    """;
+                command.Parameters.AddWithValue("$hash", codeHash);
+                using var reader = command.ExecuteReader();
+                if (!reader.Read())
+                    return null;
+
+                return ReadInvite(codeHash, reader);
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public bool TryConsumeInvite(string codeHash, string consumedByIdentityId, DateTimeOffset now)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(codeHash);
+        ArgumentException.ThrowIfNullOrWhiteSpace(consumedByIdentityId);
+
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                using var transaction = _connection.BeginTransaction();
+
+                // 1. Кожна спроба (зокрема невдала) інкрементує лічильник — G12: cap рахує всі guesses.
+                using (var bump = _connection.CreateCommand())
+                {
+                    bump.Transaction = transaction;
+                    bump.CommandText =
+                        "UPDATE invites SET attempt_count = attempt_count + 1 WHERE code_hash = $hash;";
+                    bump.Parameters.AddWithValue("$hash", codeHash);
+                    bump.ExecuteNonQuery();
+                }
+
+                // 2. Перечитуємо стан ПІСЛЯ інкремента (у тій самій транзакції).
+                InviteRecord? invite;
+                using (var read = _connection.CreateCommand())
+                {
+                    read.Transaction = transaction;
+                    read.CommandText =
+                        """
+                        SELECT created_by, consumed, attempt_count, max_attempts, expires_at, consumed_by, created_at
+                        FROM invites WHERE code_hash = $hash;
+                        """;
+                    read.Parameters.AddWithValue("$hash", codeHash);
+                    using var reader = read.ExecuteReader();
+                    invite = reader.Read() ? ReadInvite(codeHash, reader) : null;
+                }
+
+                // 3. Не redeemable? Транзакцію все одно комітимо — інкремент спроби має зберегтися (G12).
+                //    (Невідомий code_hash → bump не змінив рядків, invite==null; коміт — no-op запису.)
+                if (invite is null || invite.Consumed || invite.ExpiresAt <= now || invite.AttemptCount > invite.MaxAttempts)
+                {
+                    transaction.Commit();
+                    return false;
+                }
+
+                // 4. Умовний consume: виграє лише той, хто перевів consumed 0→1 (rows-affected==1).
+                int consumed;
+                using (var claim = _connection.CreateCommand())
+                {
+                    claim.Transaction = transaction;
+                    claim.CommandText =
+                        """
+                        UPDATE invites SET consumed = 1, consumed_by = $id
+                        WHERE code_hash = $hash AND consumed = 0;
+                        """;
+                    claim.Parameters.AddWithValue("$id", consumedByIdentityId);
+                    claim.Parameters.AddWithValue("$hash", codeHash);
+                    consumed = claim.ExecuteNonQuery();
+                }
+
+                transaction.Commit();
+                return consumed == 1;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public int AppendAbuseLog(AbuseLogRecord record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    INSERT INTO abuse_log (event_type, subject_hmac, salt, logged_at)
+                    VALUES ($type, $hmac, $salt, $loggedAt);
+                    SELECT last_insert_rowid();
+                    """;
+                command.Parameters.AddWithValue("$type", record.EventType);
+                command.Parameters.AddWithValue("$hmac", record.SubjectHmac);
+                command.Parameters.AddWithValue("$salt", record.Salt);
+                command.Parameters.AddWithValue("$loggedAt", FormatTimestamp(record.LoggedAt));
+                return Convert.ToInt32(command.ExecuteScalar());
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public void UpsertAdminCredential(AdminCredentialRecord credential)
+    {
+        ArgumentNullException.ThrowIfNull(credential);
+
+        lock (_sync)
+        {
+            WithRetry(() =>
+            {
+                // INSERT OR IGNORE: повторний provision того самого SPKI — no-op (зберігає revoked-прапорець
+                // і created_at). Ідемпотентний bootstrap (task 2.2).
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    INSERT OR IGNORE INTO admin_credentials (spki_sha256, identity_id, revoked, created_at)
+                    VALUES ($spki, $identity, $revoked, $created);
+                    """;
+                command.Parameters.AddWithValue("$spki", credential.SpkiSha256);
+                command.Parameters.AddWithValue("$identity", credential.IdentityId);
+                command.Parameters.AddWithValue("$revoked", credential.Revoked ? 1 : 0);
+                command.Parameters.AddWithValue("$created", FormatTimestamp(credential.CreatedAt));
+                command.ExecuteNonQuery();
+                return 0;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public AdminCredentialRecord? GetAdminCredential(string spkiSha256)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(spkiSha256);
+
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    "SELECT identity_id, revoked, created_at FROM admin_credentials WHERE spki_sha256 = $spki;";
+                command.Parameters.AddWithValue("$spki", spkiSha256);
+                using var reader = command.ExecuteReader();
+                if (!reader.Read())
+                    return null;
+
+                return new AdminCredentialRecord(
+                    spkiSha256, reader.GetString(0), reader.GetInt32(1) != 0, ParseTimestamp(reader.GetString(2)));
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public void RevokeAdminCredential(string spkiSha256)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(spkiSha256);
+
+        lock (_sync)
+        {
+            WithRetry(() =>
+            {
+                using var command = _connection.CreateCommand();
+                command.CommandText = "UPDATE admin_credentials SET revoked = 1 WHERE spki_sha256 = $spki;";
+                command.Parameters.AddWithValue("$spki", spkiSha256);
+                command.ExecuteNonQuery();
+                return 0;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public void AppendAuditEntry(AuditLogRecord entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+
+        lock (_sync)
+        {
+            WithRetry(() =>
+            {
+                // Прямий INSERT з явним seq: дубль seq = розрив ланцюга (SqliteException не є BUSY/LOCKED,
+                // тож WithRetry його не ковтає — спливає викликачу). Серіалізацію appendʼів гарантує
+                // AuditLogService (єдиний записувач під власним локом).
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    INSERT INTO audit_log
+                        (seq, event_type, actor_identity, detail_hash, prev_hash, entry_hash, logged_at)
+                    VALUES ($seq, $type, $actor, $detail, $prev, $entry, $loggedAt);
+                    """;
+                command.Parameters.AddWithValue("$seq", entry.Seq);
+                command.Parameters.AddWithValue("$type", entry.EventType);
+                command.Parameters.AddWithValue("$actor", entry.ActorIdentity);
+                command.Parameters.AddWithValue("$detail", entry.DetailHash);
+                command.Parameters.AddWithValue("$prev", entry.PrevHash);
+                command.Parameters.AddWithValue("$entry", entry.EntryHash);
+                command.Parameters.AddWithValue("$loggedAt", FormatTimestamp(entry.LoggedAt));
+                command.ExecuteNonQuery();
+                return 0;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public AuditLogRecord? GetLastAuditEntry()
+    {
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    SELECT seq, event_type, actor_identity, detail_hash, prev_hash, entry_hash, logged_at
+                    FROM audit_log ORDER BY seq DESC LIMIT 1;
+                    """;
+                using var reader = command.ExecuteReader();
+                return reader.Read() ? ReadAuditEntry(reader) : null;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public IReadOnlyList<AuditLogRecord> GetAuditEntries()
+    {
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                var entries = new List<AuditLogRecord>();
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    SELECT seq, event_type, actor_identity, detail_hash, prev_hash, entry_hash, logged_at
+                    FROM audit_log ORDER BY seq ASC;
+                    """;
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                    entries.Add(ReadAuditEntry(reader));
+                return (IReadOnlyList<AuditLogRecord>)entries;
+            });
+        }
+    }
+
+    // Читає AuditLogRecord із рядка (порядок колонок: seq, event_type, actor_identity, detail_hash,
+    // prev_hash, entry_hash, logged_at).
+    private static AuditLogRecord ReadAuditEntry(SqliteDataReader reader) =>
+        new(
+            reader.GetInt64(0),
+            reader.GetString(1),
+            reader.GetString(2),
+            reader.GetString(3),
+            reader.GetString(4),
+            reader.GetString(5),
+            ParseTimestamp(reader.GetString(6)));
+
+    // Читає InviteRecord із рядка (порядок колонок: created_by, consumed, attempt_count, max_attempts,
+    // expires_at, consumed_by, created_at). code_hash передаємо явно (він у WHERE, не у SELECT-списку).
+    private static InviteRecord ReadInvite(string codeHash, SqliteDataReader reader) =>
+        new(
+            codeHash,
+            reader.GetString(0),
+            reader.GetInt32(1) != 0,
+            reader.GetInt32(2),
+            reader.GetInt32(3),
+            ParseTimestamp(reader.GetString(4)),
+            reader.IsDBNull(5) ? null : reader.GetString(5),
+            ParseTimestamp(reader.GetString(6)));
+
+    /// <inheritdoc />
     public void Backup(string destinationPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
