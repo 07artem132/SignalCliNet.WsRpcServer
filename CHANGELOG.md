@@ -5,6 +5,16 @@
 Формат базується на [Keep a Changelog](https://keepachangelog.com/uk/1.1.0/),
 а нумерація версій дотримується [семантичного версіонування](https://semver.org/lang/uk/).
 
+## [Unreleased]
+
+### Added
+
+- **Admin per-binding revoke** — `revokeBinding(identityId, bindingId)` (admin RPC, mTLS-порт):
+  хірургічно анулює ОДИН group-binding чужої identity (на відміну від `revokeIdentity`, що нукає всю
+  identity). Ownership-guard: binding мусить належати вказаній identity, інакше `InvalidParams`
+  (анти-oracle); подія `admin_binding_revoked` у tamper-evident audit-trail. Закриває опційний
+  пункт `add-invites-admin` task 2.4.
+
 ## [2.0.0] — 2026-07-17
 
 Хвиля безпеки Фази 2/3: із loopback-only мосту (Фаза 1) сервер стає придатним для

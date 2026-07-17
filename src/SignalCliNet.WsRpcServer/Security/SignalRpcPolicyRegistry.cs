@@ -78,6 +78,8 @@ public sealed class SignalRpcPolicyRegistry : IRpcPolicyRegistry
         new() { Method = "createInvite", Kind = RpcPolicyKind.Admin },
         // revokeIdentity(identityId) — каскад revoke токенів+device-секрету identity (change 3).
         new() { Method = "revokeIdentity", Kind = RpcPolicyKind.Admin },
+        // revokeBinding(identityId, bindingId) — хірургічний revoke ОДНОГО group-binding чужої identity.
+        new() { Method = "revokeBinding", Kind = RpcPolicyKind.Admin },
     ];
 
     private readonly FrozenDictionary<string, RpcMethodPolicy> _byMethod =

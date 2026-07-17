@@ -175,6 +175,31 @@ public sealed class AdminMtlsDodTests : IDisposable
         Assert.True(_auditLog.VerifyChain());
     }
 
+    [Fact]
+    public async Task AdminCert_RevokeBinding_OverMtls_RevokesTargetBinding_AndAudits()
+    {
+        // Чужий юзер із активним group-binding (як після confirmGroupClaim).
+        _store.UpsertIdentity(new IdentityRecord("member", "user", [], DateTimeOffset.UtcNow));
+        _store.InsertGroupBinding(new GroupBindingRecord(
+            "bind-x", "member", "grp-abuse", "anchor", DateTimeOffset.UtcNow.AddHours(1),
+            Revoked: false, DateTimeOffset.UtcNow));
+
+        using var adminCert = LoadClientCertificate(
+            Path.Combine(_secretsDir, "admin-client.crt"), Path.Combine(_secretsDir, "admin-client.key"));
+        using var ws = await ConnectAsync(adminCert);
+
+        // Admin хірургічно анулює ОДИН binding чужого юзера (не нукаючи всю identity).
+        using var response = await CallAsync(ws,
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"revokeBinding\"," +
+            "\"params\":{\"identityId\":\"member\",\"bindingId\":\"bind-x\"}}");
+        Assert.False(response.RootElement.TryGetProperty("error", out _));
+
+        // Binding revoked у сторі (send-gate тепер відмовить member у grp-abuse); подія в audit.
+        Assert.True(_store.GetGroupBinding("member", "grp-abuse")!.Revoked);
+        Assert.Contains(_store.GetAuditEntries(), e => e.EventType == "admin_binding_revoked");
+        Assert.True(_auditLog.VerifyChain());
+    }
+
     // ---------------------------------------------------------------- 4.2 (G5)
 
     [Fact]
