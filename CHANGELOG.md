@@ -5,6 +5,26 @@
 Формат базується на [Keep a Changelog](https://keepachangelog.com/uk/1.1.0/),
 а нумерація версій дотримується [семантичного версіонування](https://semver.org/lang/uk/).
 
+## [2.1.0] — 2026-07-17
+
+### Changed
+
+- **Receive-mode за замовчуванням — `on-start` (безперервний auto-receive), розв'язаний із GroupClaim.**
+  Раніше демон стартував у `--receive-mode=manual`, доки не ввімкнено `Server:GroupClaim:Enabled`.
+  Manual тримає authenticated receive-websocket до Signal-серверів відкритим лише поки клієнт активно
+  підписаний (`subscribeReceive`); у проміжках без підписника акаунт **офлайн для вхідних** і Signal-
+  протокол деградує: виснаження one-time prekey (нові контакти не можуть встановити сесію), відсутні
+  delivery/read-receipts, вхідна черга на сервері не спорожнюється, а linked-device (вторинний пристрій)
+  не синкає групи/контакти/sent-транскрипти. Тепер `on-start` — дефолт: демон тримає receive-websocket
+  неперервно від старту, незалежно від наявності підписаних клієнтів і від GroupClaim.
+
+### Added
+
+- **`SignalCli:ContinuousReceive`** (bool, дефолт `true`) — явний перемикач receive-mode:
+  `true` ⇒ `--receive-mode=on-start`, `false` ⇒ opt-in send-only (`--receive-mode=manual`).
+  `Server:GroupClaim:Enabled` і далі **форсує** continuous попри цей ключ (сканеру claim-кодів потрібен
+  вхідний потік, R3.1). Ключ читається у `Program.ApplySignalCliConfig` (пінить `ReceiveModeConfigTests`).
+
 ## [2.0.1] — 2026-07-17
 
 ### Added

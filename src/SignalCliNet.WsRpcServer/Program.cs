@@ -83,14 +83,15 @@ public static class Program
     /// </summary>
     /// <param name="signalSection">The "SignalCli" configuration section.</param>
     /// <param name="options">The signal-cli options to populate.</param>
-    /// <param name="continuousReceive">
-    /// When <c>true</c> (gated by <c>Server:GroupClaim:Enabled</c>, R3.1), starts the daemon in continuous
-    /// auto-receive (<c>UseManualReceiveMode=false</c>) so the group-claim scanner sees incoming group chats.
-    /// Default <c>false</c> keeps the library default (manual, send-only) — current behaviour unchanged.
+    /// <param name="forceContinuousReceive">
+    /// When <c>true</c> (gated by <c>Server:GroupClaim:Enabled</c>, R3.1) forces continuous auto-receive
+    /// regardless of the <c>SignalCli:ContinuousReceive</c> key — the group-claim scanner needs the
+    /// incoming stream. Otherwise the daemon honours <c>SignalCli:ContinuousReceive</c> (default
+    /// <c>true</c> ⇒ <c>on-start</c>); set it to <c>false</c> for opt-in send-only (<c>manual</c>) mode.
     /// </param>
     public static void ApplySignalCliConfig(
         IConfigurationSection signalSection, SignalCli.Models.SignalCliOptions options,
-        bool continuousReceive = false)
+        bool forceContinuousReceive = false)
     {
         options.LibDirectory = signalSection["LibDirectory"] ?? "signal-cli/lib";
 
@@ -121,9 +122,15 @@ public static class Program
         if (int.TryParse(signalSection["RequestTimeoutSeconds"], out var requestTimeout))
             options.RequestTimeoutSeconds = requestTimeout;
 
-        // R3.1: авто-receive лише за прапорцем GroupClaim. Інакше лишаємо бібліотечний дефолт
-        // (UseManualReceiveMode=true — send-only), тобто демон не ресивить за всі акаунти (Фаза-1 поведінка).
-        if (continuousReceive)
-            options.UseManualReceiveMode = false;
+        // Receive-mode: демон мусить тримати authenticated receive-websocket до Signal-серверів, інакше
+        // акаунт офлайн для вхідних і протокол деградує (виснаження prekey, немає delivery-receipts,
+        // linked-device не синкає групи/контакти). Тому безперервний auto-receive (on-start) — ДЕФОЛТ.
+        // Opt-out у send-only (manual): SignalCli:ContinuousReceive=false. GroupClaim:Enabled
+        // (forceContinuousReceive) форсує continuous попри ключ — сканеру потрібен вхідний потік (R3.1).
+        var continuousReceive = true;
+        if (bool.TryParse(signalSection["ContinuousReceive"], out var parsed))
+            continuousReceive = parsed;
+
+        options.UseManualReceiveMode = !(forceContinuousReceive || continuousReceive);
     }
 }
