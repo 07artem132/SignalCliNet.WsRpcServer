@@ -56,7 +56,7 @@ dotnet run --project src/SignalCliNet.WsRpcServer
 | `Server:Tls:Hostname` | — | Internal-hostname у SAN авто-згенерованого server-cert (для internal-CA деплою без домену; опційно). |
 | `Server:Auth:Enabled` | `false` | Увімкнути token/PoP-автентифікацію (Фаза 2). Дефолт `false` **зберігає** Фазу-1 loopback-full-access незмінною. |
 | `Server:Auth:TokenTtlHours` | `12` | TTL access-токена, годин (1..168). |
-| `Server:Auth:AuthTimeoutSeconds` | `10` | Скільки браузерна сесія може лишатись неавтентифікованою (чекати fallback `authenticate`) до close `4408` (3..120). |
+| `Server:Auth:AuthTimeoutSeconds` | `10` | Скільки сесія без токена (браузерна або onboarding-сокет `wsrpc-onboarding`) може лишатись неавтентифікованою (чекати `authenticate` або `redeemInvite`, і далі `pop.prove`) до close `4408` (3..120). |
 | `Server:Auth:MaxUnauthenticatedPerIp` | `8` | Cap одночасних неавтентифікованих сокетів на один IP (1..1024). |
 | `Server:Auth:RenewalPerIdentityPerHour` | `4` | Скільки разів identity може оновити прострочений токен через PoP (T5) за ковзну годину (1..60). Перевищення → renewal тимчасово недоступний (close `4401 expired`). |
 | `Server:Auth:AllowedOrigins` | `[]` | Exact-match allowlist браузерних `Origin` (defense-in-depth, **не** authn). Кожен елемент — абсолютний `scheme://host[:port]` без `/` в кінці (напр. `chrome-extension://<id>`). Порожній список **відхиляє будь-який** Origin (fail-closed); запити без `Origin` (не-браузери) не підпадають під перевірку. |
@@ -68,7 +68,7 @@ dotnet run --project src/SignalCliNet.WsRpcServer
 | `SignalCli:MaxRestartAttempts` | `3` | Бюджет рестартів демона у вікні. |
 | `SignalCli:HealthCheckIntervalSeconds` | `40` | Період health-ping демона. |
 | `SignalCli:HealthCheckTimeoutSeconds` | `10` | Таймаут health-ping. |
-| `Server:GroupClaim:Enabled` | `false` | **Опт-ін.** Group-claim гейт (`add-group-claim-receive`). `false` ⇒ авто-receive вимкнено (manual/send-only), сканер/роутер/send-gate неактивні — поведінка незмінна. `true` ⇒ безперервний авто-receive + gating групових send'ів claim'ом. |
+| `Server:GroupClaim:Enabled` | `false` | **Опт-ін.** Group-claim гейт (`add-group-claim-receive`). `false` ⇒ сканер/роутер/send-gate неактивні; режим receive задає `SignalCli:ContinuousReceive` (дефолт — безперервний). `true` ⇒ форсує безперервний receive незалежно від `SignalCli:ContinuousReceive` + gating групових send'ів claim'ом. |
 | `Server:GroupClaim:ClaimTtlMinutes` | `10` | TTL one-time claim-коду (1..1440). |
 | `Server:GroupClaim:BindingTtlHours` | `720` | Backstop-TTL `(identity, group)` binding-у — форсує періодичний re-claim (1..8760). |
 | `Server:GroupClaim:MaxActiveBindingsPerIdentity` | `20` | Cap активних bindings на identity (footprint D2, 1..1000). Понад → `requestGroupClaim` = `-32008`. |
@@ -126,15 +126,18 @@ in-flight cap, server-wide гейт до signal-cli) — **опт-ін**, як �
 - **`-32005`** — перевищено rate-limit стартів лінкування (**3/хв на identity**); `error.data` несе
   `retry_after` (секунди), як і решта `-32005`.
 
-Онбординг пристрою при `Server:Auth:Enabled=true` (браузерний клієнт без токена, `Origin` в allowlist):
+Онбординг пристрою при `Server:Auth:Enabled=true` (клієнт без токена):
 
-1. Конект без токена, з реальним субпротоколом (напр. `["potuzhnist.v1"]`).
+1. Конект без токена. Браузер — з `Origin` в allowlist і реальним субпротоколом (напр. `["potuzhnist.v1"]`);
+   не-браузерний клієнт — із субпротоколом **`wsrpc-onboarding`** (інакше `HTTP 401` до апгрейду).
 2. Перший кадр — `{"jsonrpc":"2.0","id":1,"method":"redeemInvite","params":{"code":"…","devicePublicKey":"<base64 SPKI P-256>"}}`.
 3. Відповідь `{"result":{"identityId":"…","token":"ptzh_…"}}`, одразу за нею — `pop.challenge` на виданий токен.
 4. `pop.prove` (ECDSA P-256 SHA-256, IEEE P1363, над UTF-8 `nonce + connId`) → сесія активна.
 5. Наступні конекти: субпротоколи `[token, "potuzhnist.v1"]` (або fallback `authenticate`) → `pop.challenge` → `pop.prove`.
 
-Одна спроба редемпшну на з'єднання: відмова → error-кадр і close `4401 invalid`.
+Одна спроба редемпшну на з'єднання: відмова → error-кадр і close `4401 invalid`. `id` запиту має бути
+рядком або числом (інакше `4401` без витрати інвайту). Auth-таймаут (`AuthTimeoutSeconds`) діє з моменту
+підключення: `redeemInvite` і `pop.prove` мають встигнути до нього, інакше close `4408`.
 
 Коди відмов онбордингу через інвайт (`redeemInvite`, зміна `add-invites-admin`):
 
@@ -187,23 +190,17 @@ integrity-check (пошкоджена БД → **відмова старту**) 
 (`PRAGMA user_version`). Data-dir захищено exclusive lockfile: **другий процес на тому ж каталозі
 не стартує** (G1, `replicas=1`).
 
-## Receive-mode (гейтиться `Server:GroupClaim:Enabled`)
+## Receive-mode
 
-Режим receive **прив'язаний до прапорця group-claim** (R3.1 скасовує send-only передумову V2):
+З 2.1.0 receive-mode **розв'язаний із group-claim**:
 
-- **`Server:GroupClaim:Enabled=false` (дефолт)** — signal-cli стартує у **`--receive-mode=manual`**
-  (`UseManualReceiveMode=true`, send-only). Демон **не** receive-ить вхідні за всі акаунти. Наслідок:
-  щойно-злінкований власний номер може мати порожній/stale `listGroups`, доки не пройде sync через
-  receive. Це очікувана поведінка Фази-1, а не баг.
-- **`Server:GroupClaim:Enabled=true`** — сервер вмикає **безперервний авто-receive**
-  (`--receive-mode=on-start`), бо це потрібно, щоб код-сканер груп-claim матчив коди у вхідному потоці.
-  Head-of-line-ефект спільного stdout-loop (Уточнення-3) знімається **окремим non-blocking споживачем**
-  (сканер) — повільний скан не блокує RPC-відповіді.
-
-> **G7 (link-sessions, task 5).** Коли group-claim вимкнено, після `finishLink` нового номера
-> `listGroups(account)` може бути **порожнім/stale до першого receive** — link-sessions свідомо НЕ робить
-> one-shot receive/sync. З увімкненим group-claim демон receive-ить безперервно, тож групи підтягуються
-> без ручного receive.
+- **`SignalCli:ContinuousReceive=true` (дефолт)** — signal-cli стартує у **`--receive-mode=on-start`**:
+  демон тримає receive-websocket до Signal неперервно, тож вхідні повідомлення (`signal.textMessage`
+  тощо) доходять до підписаних клієнтів, а linked-device синкає групи/контакти.
+- **`SignalCli:ContinuousReceive=false`** — `--receive-mode=manual`: авто-receive вимкнено, вхідні приходять
+  лише поки є WS-клієнт із `subscribe` на акаунт (сервер тоді викликає `subscribeReceive`).
+- **`Server:GroupClaim:Enabled=true`** форсує continuous незалежно від ключа вище (сканеру claim-кодів
+  потрібен вхідний потік). Head-of-line-ефект спільного stdout-loop знімає окремий non-blocking споживач.
 
 ## Контейнер
 

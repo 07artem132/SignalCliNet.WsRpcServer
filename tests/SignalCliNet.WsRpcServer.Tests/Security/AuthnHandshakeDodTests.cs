@@ -11,6 +11,9 @@ using Microsoft.Extensions.Logging;
 using Moq;
 using SignalCliNet.WsRpcServer.Deployment;
 using SignalCliNet.WsRpcServer.Extensions;
+using SignalCliNet.WsRpcServer.Interfaces;
+using SignalCliNet.WsRpcServer.Model;
+using SignalCliNet.WsRpcServer.Sessions;
 using SignalCliNet.WsRpcServer.Persistence;
 using SignalCliNet.WsRpcServer.Security;
 using SignalCliNet.WsRpcServer.Services;
@@ -96,6 +99,7 @@ public sealed class AuthnHandshakeDodTests : IAsyncLifetime
         // Онбординг: мок інвайт-логіки (її покривають власні тести), але з РЕАЛЬНИМ enrollment-ом —
         // pre-auth redeemInvite має видати справжній токен, на який далі йде PoP.
         services.AddSingleton(_onboardingMock.Object);
+
 
         _services = services.BuildServiceProvider();
         _tokenService = _services.GetRequiredService<TokenService>();
@@ -387,6 +391,68 @@ public sealed class AuthnHandshakeDodTests : IAsyncLifetime
     }
 
     // ================================================================ інфраструктура
+
+    // ---------------------------------------------------------------- онбординг не-браузерного клієнта
+
+    [Fact]
+    public async Task NonBrowser_OnboardingSubprotocol_RedeemInvite_ThenPop_SameSocket()
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        using var ws = await ConnectAsync([SignalRpcSession.OnboardingSubprotocol]);
+        Assert.Equal(SignalRpcSession.OnboardingSubprotocol, ws.SubProtocol);
+
+        await SendJsonAsync(ws, RedeemFrame(1, ValidInviteCode, Convert.ToBase64String(key.ExportSubjectPublicKeyInfo())));
+        using (var ack = await ReceiveJsonAsync(ws))
+        {
+            var result = ack.RootElement.GetProperty("result");
+            Assert.StartsWith(TokenFormat.Prefix, result.GetProperty("token").GetString());
+            Assert.False(string.IsNullOrEmpty(result.GetProperty("identityId").GetString()));
+        }
+
+        // Після redeem сокет ще pre-auth: бізнес-сервіси не зареєстровані до PoP.
+        _registryMock.Verify(
+            r => r.RegisterServices(It.IsAny<StreamJsonRpc.JsonRpc>(), It.IsAny<Guid>()), Times.Never);
+
+        // Той самий конект: pop.challenge на виданий токен → підпис → активна сесія.
+        await CompletePopAsync(ws, key);
+        Assert.Equal(WebSocketState.Open, ws.State);
+    }
+
+    [Fact]
+    public async Task NonBrowser_OnboardingSubprotocol_InvalidCode_ErrorThenClose4401()
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        using var ws = await ConnectAsync([SignalRpcSession.OnboardingSubprotocol]);
+
+        await SendJsonAsync(ws, RedeemFrame(1, "BAD-CODE", Convert.ToBase64String(key.ExportSubjectPublicKeyInfo())));
+        using (var error = await ReceiveJsonAsync(ws))
+            Assert.Equal(SignalOnboardingRpcAdapter.InviteInvalidCode, error.RootElement.GetProperty("error").GetProperty("code").GetInt32());
+
+        var (code, reason) = await ReceiveCloseAsync(ws);
+        Assert.Equal(4401, code);
+        Assert.Equal("invalid", reason);
+    }
+
+    [Theory]
+    [InlineData("{\"x\":1}")]
+    [InlineData("[1]")]
+    [InlineData("null")]
+    public async Task RedeemInvite_NonScalarId_Closes4401_WithoutConsumingInvite(string rawId)
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        using var ws = await ConnectAsync([SignalRpcSession.OnboardingSubprotocol]);
+
+        await SendJsonAsync(ws, RedeemFrame(rawId, ValidInviteCode, Convert.ToBase64String(key.ExportSubjectPublicKeyInfo())));
+        var (code, _) = await ReceiveCloseAsync(ws);
+        Assert.Equal(4401, code);
+        // Одноразовий інвайт не витрачено: до адаптера redeem не дійшов.
+        _onboardingMock.Verify(
+            o => o.RedeemInvite(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    private static string RedeemFrame(string rawId, string code, string devicePublicKey) =>
+        "{\"jsonrpc\":\"2.0\",\"id\":" + rawId + ",\"method\":\"redeemInvite\",\"params\":{\"code\":\"" + code +
+        "\",\"devicePublicKey\":\"" + devicePublicKey + "\"}}";
 
     private string SeedIdentity(string id)
     {

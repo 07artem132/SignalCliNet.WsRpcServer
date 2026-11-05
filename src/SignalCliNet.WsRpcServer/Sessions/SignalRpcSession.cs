@@ -39,6 +39,13 @@ namespace SignalCliNet.WsRpcServer.Sessions;
 /// </remarks>
 public sealed class SignalRpcSession : AbstractJsonRpcSession
 {
+    /// <summary>
+    /// Reserved WS subprotocol a NON-browser client offers (without a token) to open a pre-auth socket for
+    /// invite onboarding (<c>redeemInvite</c>). Without it a token-less non-browser upgrade is rejected
+    /// with HTTP 401 (unchanged), so a brand-new device could never obtain its first token.
+    /// </summary>
+    public const string OnboardingSubprotocol = "wsrpc-onboarding";
+
     /// <summary>Upper bound on a pre-auth message (bytes) — the fallback <c>authenticate</c> is tiny.</summary>
     private const int PreAuthMaxBytes = 4096;
 
@@ -87,6 +94,7 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
 
     // Токен-кандидат із upgrade — REDACT: ніколи не логувати; чистимо одразу після автентифікації.
     private string? _pendingToken;
+
     private string? _remoteIp;
     private int _unauthSlotHeld;           // 0/1 — тримаємо unauth-слот у per-IP cap (release рівно раз)
     private string? _tokenHash;            // at-rest hash активної token-сесії (для IsLive-перевірки)
@@ -256,15 +264,16 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
         }
 
         // Токена немає взагалі:
-        if (origin is null)
+        if (origin is null && !subprotocols.Contains(OnboardingSubprotocol, StringComparer.Ordinal))
         {
             // Не-браузерний клієнт без токена → голий HTTP 401 ДО апгрейду.
             RejectBeforeUpgrade(response, 401, "Unauthorized");
             return false;
         }
 
-        // Браузер (Origin пройшов allowlist), але без токена → дозволяємо upgrade і чекаємо fallback
-        // authenticate під auth-таймаутом.
+        // Браузер (Origin пройшов allowlist) АБО не-браузер з онбординг-субпротоколом, але без токена →
+        // дозволяємо upgrade і чекаємо fallback authenticate / одноразовий redeemInvite під auth-таймаутом
+        // (той самий cap неавтентифікованих сокетів на IP).
         if (!TryAcquireUnauthSlot())
         {
             RejectBeforeUpgrade(response, 429, "Too Many Requests");
@@ -785,7 +794,8 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
     }
 
     // Обробник pre-auth повідомлення. Один допустимий метод на стан: у AwaitingAuthenticate — authenticate
-    // (params.token); у PoPPending — pop.prove (params.signature). Будь-що інше (в т.ч. authenticate вдруге
+    // (params.token) АБО redeemInvite (params.code + params.devicePublicKey; онбординг без токена, одна
+    // спроба на сокет, сокет лишається AwaitingAuthenticate); у PoPPending — pop.prove (params.signature). Будь-що інше (в т.ч. authenticate вдруге
     // у PoPPending) / малформ / завеликий розмір → close 4401. REDACT: тіло містить token/signature —
     // його НІКОЛИ не логувати.
     private void HandlePreAuthMessage(byte[] buffer, long offset, long size)
@@ -860,7 +870,12 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
         // AwaitingAuthenticate: онбординг нового пристрою — redeemInvite без токена (у нього ще немає
         // токена, тож до RPC-стеку він не дійде). Успіх → ack {identityId, token} і одразу pop.challenge
         // на щойно виданий токен (той самий PoP-шлях, що й authenticate).
-        if (string.Equals(method, "redeemInvite", StringComparison.Ordinal))
+        // Лише з AwaitingAuthenticate і зі скалярним id (JSON-RPC 2.0: рядок/число): кадр після close
+        // (Closed — напр. спрацював auth-таймер) або з id-об'єктом/масивом/null не витрачає одноразовий
+        // інвайт, а йде у 4401 нижче.
+        if (string.Equals(method, "redeemInvite", StringComparison.Ordinal) &&
+            state == SessionAuthState.AwaitingAuthenticate &&
+            ackId is { ValueKind: JsonValueKind.String or JsonValueKind.Number })
         {
             HandlePreAuthRedeem(inviteCode, devicePublicKey, ackId);
             return;
