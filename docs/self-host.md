@@ -126,6 +126,16 @@ in-flight cap, server-wide гейт до signal-cli) — **опт-ін**, як �
 - **`-32005`** — перевищено rate-limit стартів лінкування (**3/хв на identity**); `error.data` несе
   `retry_after` (секунди), як і решта `-32005`.
 
+Онбординг пристрою при `Server:Auth:Enabled=true` (браузерний клієнт без токена, `Origin` в allowlist):
+
+1. Конект без токена, з реальним субпротоколом (напр. `["potuzhnist.v1"]`).
+2. Перший кадр — `{"jsonrpc":"2.0","id":1,"method":"redeemInvite","params":{"code":"…","devicePublicKey":"<base64 SPKI P-256>"}}`.
+3. Відповідь `{"result":{"identityId":"…","token":"ptzh_…"}}`, одразу за нею — `pop.challenge` на виданий токен.
+4. `pop.prove` (ECDSA P-256 SHA-256, IEEE P1363, над UTF-8 `nonce + connId`) → сесія активна.
+5. Наступні конекти: субпротоколи `[token, "potuzhnist.v1"]` (або fallback `authenticate`) → `pop.challenge` → `pop.prove`.
+
+Одна спроба редемпшну на з'єднання: відмова → error-кадр і close `4401 invalid`.
+
 Коди відмов онбордингу через інвайт (`redeemInvite`, зміна `add-invites-admin`):
 
 - **`-32006`** — невалідний інвайт-код (невідомий / прострочений / уже погашений / понад attempt-cap).

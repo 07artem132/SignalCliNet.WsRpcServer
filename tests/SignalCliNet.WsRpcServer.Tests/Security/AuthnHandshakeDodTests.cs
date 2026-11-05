@@ -40,6 +40,8 @@ public sealed class AuthnHandshakeDodTests : IAsyncLifetime
 
     private readonly CapturingLoggerProvider _logCapture = new();
     private readonly Mock<IRpcServiceRegistry> _registryMock = new();
+    private readonly Mock<SignalCliNet.WsRpcServer.Interfaces.ISignalOnboardingRpc> _onboardingMock = new();
+    private const string ValidInviteCode = "GOOD-CODE";
 
     private ServiceProvider _services = null!;
     private SignalRpcServer _server = null!;
@@ -91,10 +93,28 @@ public sealed class AuthnHandshakeDodTests : IAsyncLifetime
         services.AddSingleton(_registryMock.Object);
         services.AddSingleton(Mock.Of<IEventProcessor>());
         services.AddSingleton<IRpcPolicyRegistry, SignalRpcPolicyRegistry>();
+        // Онбординг: мок інвайт-логіки (її покривають власні тести), але з РЕАЛЬНИМ enrollment-ом —
+        // pre-auth redeemInvite має видати справжній токен, на який далі йде PoP.
+        services.AddSingleton(_onboardingMock.Object);
 
         _services = services.BuildServiceProvider();
         _tokenService = _services.GetRequiredService<TokenService>();
         _enrollment = _services.GetRequiredService<DeviceEnrollmentService>();
+        _onboardingMock
+            .Setup(o => o.RedeemInvite(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Returns<string, string, CancellationToken>((code, key, _) =>
+            {
+                if (code != ValidInviteCode)
+                {
+                    throw new global::WsRpcServer.Exceptions.RpcErrorException(
+                        (StreamJsonRpc.Protocol.JsonRpcErrorCode)SignalOnboardingRpcAdapter.InviteInvalidCode,
+                        "Invite is invalid or has expired.");
+                }
+
+                var id = SeedIdentity("redeemed-" + Guid.NewGuid().ToString("N")[..8]);
+                var (token, _) = _enrollment.Enroll(id, key);
+                return Task.FromResult(new SignalCliNet.WsRpcServer.Model.RedeemInviteResponse(id, token));
+            });
 
         _port = GetFreePort();
         _server = new SignalRpcServer(
@@ -256,6 +276,42 @@ public sealed class AuthnHandshakeDodTests : IAsyncLifetime
         Assert.Equal("expired", reason);
     }
 
+    // ---------------------------------------------------------------- pre-auth redeemInvite (онбординг)
+
+    [Fact]
+    public async Task BrowserClient_RedeemInvite_PreAuth_GetsToken_ThenPopActivates()
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        using var ws = await ConnectAsync([RealProto], origin: AllowedOrigin);
+
+        await SendJsonAsync(ws, RedeemFrame(1, ValidInviteCode, Convert.ToBase64String(key.ExportSubjectPublicKeyInfo())));
+        using (var ack = await ReceiveJsonAsync(ws))
+        {
+            var result = ack.RootElement.GetProperty("result");
+            Assert.StartsWith(TokenFormat.Prefix, result.GetProperty("token").GetString());
+            Assert.False(string.IsNullOrEmpty(result.GetProperty("identityId").GetString()));
+        }
+
+        // Той самий конект: pop.challenge на щойно виданий токен → підпис → активна сесія.
+        await CompletePopAsync(ws, key);
+        Assert.Equal(WebSocketState.Open, ws.State);
+    }
+
+    [Fact]
+    public async Task BrowserClient_RedeemInvite_InvalidCode_ErrorThenClose4401()
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        using var ws = await ConnectAsync([RealProto], origin: AllowedOrigin);
+
+        await SendJsonAsync(ws, RedeemFrame(1, "BAD-CODE", Convert.ToBase64String(key.ExportSubjectPublicKeyInfo())));
+        using (var error = await ReceiveJsonAsync(ws))
+            Assert.Equal(SignalOnboardingRpcAdapter.InviteInvalidCode, error.RootElement.GetProperty("error").GetProperty("code").GetInt32());
+
+        var (code, reason) = await ReceiveCloseAsync(ws);
+        Assert.Equal(4401, code);
+        Assert.Equal("invalid", reason);
+    }
+
     // ---------------------------------------------------------------- 4.7 (T5)
 
     [Fact]
@@ -365,6 +421,10 @@ public sealed class AuthnHandshakeDodTests : IAsyncLifetime
     // JSON-кадри pre-auth протоколу: конкатенація замість raw-інтерполяції (CS9007 на `}}`+`}}`).
     private static string AuthenticateFrame(int id, string token) =>
         "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"method\":\"authenticate\",\"params\":{\"token\":\"" + token + "\"}}";
+
+    private static string RedeemFrame(int id, string code, string devicePublicKey) =>
+        "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"method\":\"redeemInvite\",\"params\":{\"code\":\"" + code +
+        "\",\"devicePublicKey\":\"" + devicePublicKey + "\"}}";
 
     private static string PopProveFrame(int id, string signature) =>
         "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"method\":\"pop.prove\",\"params\":{\"signature\":\"" + signature + "\"}}";

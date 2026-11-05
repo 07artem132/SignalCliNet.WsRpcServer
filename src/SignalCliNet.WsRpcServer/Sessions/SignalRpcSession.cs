@@ -12,6 +12,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NetCoreServer;
 using SignalCliNet.WsRpcServer.Deployment;
+using SignalCliNet.WsRpcServer.Model;
 using SignalCliNet.WsRpcServer.Persistence;
 using SignalCliNet.WsRpcServer.Security;
 using SignalCliNet.WsRpcServer.Security.Admission;
@@ -42,6 +43,7 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
     private const int PreAuthMaxBytes = 4096;
 
     private readonly IRpcServiceRegistry _serviceRegistry;
+    private readonly IServiceProvider _serviceProvider;
     private readonly IEventProcessor _eventProcessor;
     private readonly IRpcPolicyRegistry _policyRegistry;
     private readonly Channel<RpcNotification> _notificationChannel;
@@ -132,6 +134,7 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
         _eventProcessor = eventProcessor ?? throw new ArgumentNullException(nameof(eventProcessor));
         _config = config ?? throw new ArgumentNullException(nameof(config));
         _serviceRegistry = serviceRegistry ?? throw new ArgumentNullException(nameof(serviceRegistry));
+        _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
         _policyRegistry = policyRegistry ?? throw new ArgumentNullException(nameof(policyRegistry));
         _authOptions = (authOptions ?? throw new ArgumentNullException(nameof(authOptions))).Value;
         _tokenService = tokenService ?? throw new ArgumentNullException(nameof(tokenService));
@@ -797,6 +800,8 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
         string? method = null;
         string? token = null;
         string? signature = null;
+        string? inviteCode = null;
+        string? devicePublicKey = null;
         JsonElement? ackId = null;
         try
         {
@@ -814,6 +819,10 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
                         token = t.GetString();
                     if (p.TryGetProperty("signature", out var s) && s.ValueKind == JsonValueKind.String)
                         signature = s.GetString();
+                    if (p.TryGetProperty("code", out var c) && c.ValueKind == JsonValueKind.String)
+                        inviteCode = c.GetString();
+                    if (p.TryGetProperty("devicePublicKey", out var k) && k.ValueKind == JsonValueKind.String)
+                        devicePublicKey = k.GetString();
                 }
             }
         }
@@ -848,7 +857,97 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
             return;
         }
 
+        // AwaitingAuthenticate: онбординг нового пристрою — redeemInvite без токена (у нього ще немає
+        // токена, тож до RPC-стеку він не дійде). Успіх → ack {identityId, token} і одразу pop.challenge
+        // на щойно виданий токен (той самий PoP-шлях, що й authenticate).
+        if (string.Equals(method, "redeemInvite", StringComparison.Ordinal))
+        {
+            HandlePreAuthRedeem(inviteCode, devicePublicKey, ackId);
+            return;
+        }
+
         CloseUnknownPreAuthMethod();
+    }
+
+    // Pre-auth redeemInvite (онбординг пристрою при Server:Auth:Enabled). Одна спроба на з'єднання:
+    // відмова (невалідний код -32006, rate-cap -32005, малформ ключа -32602) → error-кадр і close 4401
+    // invalid. REDACT: ні код, ні ключ, ні виданий токен не логуються.
+    private void HandlePreAuthRedeem(string? code, string? devicePublicKey, JsonElement? ackId)
+    {
+        RedeemInviteResponse redeemed;
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var onboarding = scope.ServiceProvider.GetRequiredService<SignalCliNet.WsRpcServer.Interfaces.ISignalOnboardingRpc>();
+            // Адаптер завершується синхронно (Task.FromResult; стор синхронний), а pre-auth обробник
+            // викликається з receive-циклу NetCoreServer, тож чекання тут не блокує пул.
+            redeemed = onboarding.RedeemInvite(code ?? string.Empty, devicePublicKey ?? string.Empty)
+                .GetAwaiter().GetResult();
+        }
+        catch (global::WsRpcServer.Exceptions.RpcErrorException ex)
+        {
+            Logger.LogInformation("Сесія {ClientId}: pre-auth redeemInvite відхилено ({Code}).", Id, (int)ex.ErrorCode);
+            if (ackId is { } errorId)
+                SendPreAuthError(errorId, (int)ex.ErrorCode, ex.Message, ex.ErrorData as RateLimitErrorData);
+            CloseAuth(AuthCloseCodes.TokenRejected, AuthCloseReasons.Invalid);
+            return;
+        }
+
+        if (ackId is { } id)
+            SendRedeemAck(id, redeemed);
+
+        ResolveToken(_tokenService.Authenticate(redeemed.Token), fromFallback: true);
+    }
+
+    // Result-ack pre-auth redeemInvite: {"identityId":"…","token":"<plaintext>"}. Будуємо вручну
+    // Utf8JsonWriter-ом — токен НЕ проходить через загальний серіалізатор і не логується.
+    private void SendRedeemAck(JsonElement id, RedeemInviteResponse redeemed)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("jsonrpc", "2.0");
+            writer.WritePropertyName("id");
+            id.WriteTo(writer);
+            writer.WritePropertyName("result");
+            writer.WriteStartObject();
+            writer.WriteString("identityId", redeemed.IdentityId);
+            writer.WriteString("token", redeemed.Token);
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+        }
+
+        SendTextAsync(buffer.WrittenSpan);
+    }
+
+    // Error-кадр pre-auth виклику: {code, message[, data.retry_after]} — без деталей винятку (санітизовано).
+    private void SendPreAuthError(JsonElement id, int code, string message, RateLimitErrorData? rateLimit)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("jsonrpc", "2.0");
+            writer.WritePropertyName("id");
+            id.WriteTo(writer);
+            writer.WritePropertyName("error");
+            writer.WriteStartObject();
+            writer.WriteNumber("code", code);
+            writer.WriteString("message", message);
+            if (rateLimit is not null)
+            {
+                writer.WritePropertyName("data");
+                writer.WriteStartObject();
+                writer.WriteNumber("retry_after", rateLimit.RetryAfter);
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+        }
+
+        SendTextAsync(buffer.WrittenSpan);
     }
 
     // Спільний close-шлях для неочікуваного pre-auth методу (через стан-машину → 4401 invalid).
