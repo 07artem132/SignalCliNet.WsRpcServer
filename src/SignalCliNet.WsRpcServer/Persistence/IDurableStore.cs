@@ -219,9 +219,71 @@ public interface IDurableStore
     /// <param name="resultJson">The first-call result JSON to persist for future retries.</param>
     void CompleteSend(string identityId, string messageId, string resultJson);
 
+    /// <summary>Inserts a new team (add-team-notify).</summary>
+    void InsertTeam(TeamRecord team);
+
+    /// <summary>Returns the team <paramref name="teamId"/>, or <c>null</c>.</summary>
+    TeamRecord? GetTeam(string teamId);
+
+    /// <summary>Returns every team (admin <c>listTeams</c>).</summary>
+    IReadOnlyList<TeamRecord> GetTeams();
+
+    /// <summary>Adds an identity to a team; an identity already in a team is an error (≤1 team).</summary>
+    void InsertTeamMember(TeamMemberRecord member);
+
+    /// <summary>Returns the team membership of <paramref name="identityId"/>, or <c>null</c>.</summary>
+    TeamMemberRecord? GetTeamMember(string identityId);
+
+    /// <summary>Returns every membership row (active and revoked) of <paramref name="teamId"/>.</summary>
+    IReadOnlyList<TeamMemberRecord> GetTeamMembers(string teamId);
+
+    /// <summary>
+    /// Changes the team role of an active member. With <paramref name="enforceLastAdmin"/>, demoting the last
+    /// active team-admin is refused (<see cref="TeamMutationResult.LastTeamAdmin"/>); check and change run in one
+    /// transaction.
+    /// </summary>
+    TeamMutationResult TrySetTeamRole(string identityId, string teamRole, bool enforceLastAdmin);
+
+    /// <summary>
+    /// Revokes an active membership. With <paramref name="enforceLastAdmin"/>, removing the last active team-admin
+    /// is refused; check and change run in one transaction.
+    /// </summary>
+    TeamMutationResult TryRemoveTeamMember(string identityId, bool enforceLastAdmin);
+
+    /// <summary>Creates or atomically replaces the <c>(team, alias)</c> binding.</summary>
+    void UpsertTeamBinding(TeamBindingRecord binding);
+
+    /// <summary>Returns the <c>(team, alias)</c> binding (any state), or <c>null</c>.</summary>
+    TeamBindingRecord? GetTeamBinding(string teamId, string alias);
+
+    /// <summary>Returns every alias binding of <paramref name="teamId"/>.</summary>
+    IReadOnlyList<TeamBindingRecord> GetTeamBindings(string teamId);
+
+    /// <summary>Marks the <c>(team, alias)</c> binding revoked.</summary>
+    void RevokeTeamBinding(string teamId, string alias);
+
+    /// <summary>
+    /// Deletes send-dedup rows whose scope key starts with <paramref name="scopePrefix"/> and that are older
+    /// than <paramref name="olderThan"/>. Returns the number of deleted rows.
+    /// </summary>
+    int PurgeSendDedup(string scopePrefix, DateTimeOffset olderThan);
+
     /// <summary>
     /// Writes a consistent online backup of the database to <paramref name="destinationPath"/>
     /// (G4 — the destination SHOULD be a separate encrypted volume; see deploy/DEPLOYMENT.md).
     /// </summary>
     void Backup(string destinationPath);
+}
+
+/// <summary>Outcome of a team-membership mutation (add-team-notify).</summary>
+public enum TeamMutationResult
+{
+    /// <summary>The change was applied.</summary>
+    Applied,
+
+    /// <summary>No active membership for the identity.</summary>
+    NotFound,
+
+    /// <summary>Refused: the change would leave the team without an active team-admin.</summary>
+    LastTeamAdmin,
 }

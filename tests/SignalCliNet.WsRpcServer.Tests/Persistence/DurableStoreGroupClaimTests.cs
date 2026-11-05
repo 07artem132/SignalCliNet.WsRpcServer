@@ -174,6 +174,11 @@ public sealed class DurableStoreGroupClaimTests : IDisposable
                     identity_id TEXT NOT NULL REFERENCES identities(id) ON DELETE CASCADE,
                     account TEXT NOT NULL, PRIMARY KEY (identity_id, account)
                 ) STRICT;
+                CREATE TABLE invites (
+                    code_hash TEXT PRIMARY KEY, created_by TEXT NOT NULL, consumed INTEGER NOT NULL DEFAULT 0,
+                    attempt_count INTEGER NOT NULL DEFAULT 0, max_attempts INTEGER NOT NULL,
+                    expires_at TEXT NOT NULL, consumed_by TEXT, created_at TEXT NOT NULL
+                ) STRICT;
                 INSERT INTO identities (id, role, created_at)
                 VALUES ('id-u', 'user', '2026-07-17T12:00:00.0000000+00:00');
                 PRAGMA user_version = 5;

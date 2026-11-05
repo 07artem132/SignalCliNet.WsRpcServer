@@ -190,3 +190,48 @@ App-ізоляція тримає межу на **поверхні** (RPC/receiv
 (binding) — жодного тіла/номера. Сканер — **окремий non-blocking споживач** (bounded-channel, drop-oldest)
 поза гарячим RPC-шляхом: повільний скан не блокує RPC-відповіді (head-of-line спільного stdout-loop,
 Уточнення-3).
+
+## Команди й сповіщення за alias (зміна `add-team-notify`)
+
+Команда — група identity (один пристрій = одна identity), що шлють сповіщення в **спільні** чати через
+shared-bot. Межа доступу — командні прив'язки чатів: користувач може слати лише туди, куди його команда
+прив'язала чат. Текст шлюз не фільтрує (`sendTextMessage` лишається для всіх) — шаблони живуть у клієнті.
+
+### Ролі та онбординг
+
+1. Адмін шлюзу (mTLS-порт): `createTeam(name)` → `teamId`, потім `createInvite(teamId, teamRole: "team-admin")`.
+2. Team-admin: `createTeamInvite(maxRedemptions, ttlSeconds?, teamRole?)` — інвайт **лише у свою** команду,
+   multi-use до `maxRedemptions` (≤1000) погашень. Кожне погашення (`redeemInvite`) створює окрему identity
+   в команді. `member` на цей метод отримує `-32001`.
+3. Team-admin керує складом: `listTeamMembers`, `setTeamRole(identityId, role)`, `removeTeamMember(identityId)`
+   (себе може видалити будь-хто).
+
+**Команда не лишається без team-admin:** зняття ролі чи видалення останнього team-admin → `-32013`; перевірка
+і зміна — в одній транзакції стору (дві паралельні «зніми одне одного» → рівно одна успішна). Порядок
+передачі ролі: спершу підвищ нового, потім знімай себе.
+
+**Break-glass:** `revokeIdentity` адміна шлюзу (компрометація пристрою) проходить завжди, навіть для
+останнього team-admin. Такий стан видно в `listTeams` (`activeTeamAdmins = 0`); адмін видає новий
+`createInvite(teamId, "team-admin")` або `adminSetTeamRole(identityId, "team-admin")` (усе — в audit-trail).
+
+### Alias-прив'язки чатів
+
+Alias: `all`, `admin`, `dir:<id>`, `login:<id>` (`<id>` — `[A-Za-z0-9_-]{1,64}`). Team-admin просить код
+`requestGroupClaim(alias)` і вставляє його в потрібну групу — той самий claim-флоу й anchor-модель (T2), що й
+для особистих bindings; результат — командна прив'язка `(team, alias) → група`. Повторний claim того ж alias
+атомарно перепривʼязує його. `listTeamBindings` / `revokeTeamBinding(alias)`.
+
+Відправка: `sendTextMessage(account = shared-bot, recipients = ["alias:dir:1"], message, messageId)`. Alias
+резолвиться лише в прив'язки команди виклику; чужий чи неіснуючий alias → `-32007` (та сама відмова, що й
+для групи без binding — anti-oracle). Шле будь-який пристрій команди.
+
+### Dedup і coalescing за чатом
+
+- **Dedup:** для send у рівно одну групу ключ — `(groupId, messageId)`, а не `(identity, messageId)`: дві
+  вкладки, дві identity чи два alias на той самий чат з однаковим `messageId` дають одне повідомлення й
+  однаковий результат. Рядки чистяться за `Notify:DedupTtlHours`.
+- **Coalescing:** перше повідомлення в чат іде одразу й відкриває вікно `Notify:CoalesceWindowSeconds`;
+  наступні в той самий чат стають у чергу й ідуть одним повідомленням (через `\n`) у кінці вікна. Відповідь на
+  поставлене в чергу — `SendMessageResponse` з порожнім `results` і `timestamp = 0`. Чати між собою не
+  змішуються. Черга в пам'яті: graceful stop її відправляє, краш процесу — губить (at-most-once).
+

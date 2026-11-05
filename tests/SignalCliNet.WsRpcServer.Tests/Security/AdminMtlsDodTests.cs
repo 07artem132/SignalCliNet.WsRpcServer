@@ -77,6 +77,7 @@ public sealed class AdminMtlsDodTests : IDisposable
         services.AddSingleton<TokenService>();
         services.AddSingleton<RevocationBroadcaster>();
         services.AddSingleton<AuditLogService>();
+        services.AddSingleton<TeamService>();
         services.AddSingleton(_accountsMock.Object);
         services.AddSingleton<IRpcPolicyRegistry, SignalRpcPolicyRegistry>();
         services.AddSingleton<IEventProcessor, NoopEventProcessor>();

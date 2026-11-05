@@ -20,10 +20,41 @@ public interface ISignalAdminRpc : IRpcService
     /// </summary>
     /// <param name="ttlSeconds">Optional TTL in seconds (defaults to the configured admin default).</param>
     /// <param name="maxAttempts">Optional per-code redeem-attempt cap (defaults to the configured admin default).</param>
+    /// <param name="teamId">
+    /// Optional team (add-team-notify): each redemption adds a new identity to it with <paramref name="teamRole"/>.
+    /// Break-glass path for a team left without a team-admin.
+    /// </param>
+    /// <param name="teamRole">Team role for redeemed identities (required with <paramref name="teamId"/>).</param>
+    /// <param name="maxRedemptions">How many times the invite can be redeemed (≥1; &gt;1 only with a team).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The plaintext invite code and its absolute expiry.</returns>
     Task<CreateInviteResponse> CreateInvite(
-        int? ttlSeconds = null, int? maxAttempts = null, CancellationToken cancellationToken = default);
+        int? ttlSeconds = null, int? maxAttempts = null, string? teamId = null, string? teamRole = null,
+        int maxRedemptions = 1, CancellationToken cancellationToken = default);
+
+    /// <summary>Creates a team (add-team-notify). Follow with <c>createInvite(teamId, "team-admin")</c>.</summary>
+    /// <param name="name">Human-readable team name (not PII).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The new team id and name.</returns>
+    Task<CreateTeamResponse> CreateTeam(string name, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists teams with their active member / team-admin counts; <c>activeTeamAdmins = 0</c> marks a team
+    /// left without an admin (e.g. after <c>revokeIdentity</c>) that needs a break-glass invite.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>All teams.</returns>
+    Task<ListTeamsResponse> ListTeams(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Break-glass role change for any identity in a team. The ≥1 team-admin invariant still holds
+    /// (<c>-32013</c>); promote first, then demote.
+    /// </summary>
+    /// <param name="identityId">Target identity.</param>
+    /// <param name="teamRole"><c>team-admin</c> or <c>member</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The member's new role.</returns>
+    Task<TeamMemberInfo> AdminSetTeamRole(string identityId, string teamRole, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Revokes ALL of an identity's credentials (access tokens + device secret, cascade) and tears down its

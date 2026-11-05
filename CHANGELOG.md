@@ -5,7 +5,7 @@
 Формат базується на [Keep a Changelog](https://keepachangelog.com/uk/1.1.0/),
 а нумерація версій дотримується [семантичного версіонування](https://semver.org/lang/uk/).
 
-## [2.2.1] — 2026-11-05
+## [2.3.1] — 2026-11-05
 
 ### Fixed
 
@@ -30,6 +30,32 @@
 
 - `docs/self-host.md`: секцію receive-mode приведено у відповідність до 2.1.0 (дефолт `on-start`,
   перемикач `SignalCli:ContinuousReceive`); описано онбординг-субпротокол.
+
+## [2.3.0] — 2026-11-05
+
+### Added
+
+- **Команди й сповіщення за alias (`add-team-notify`).** Команда — набір identity, що шлють у спільні чати
+  через shared-bot. Адмін шлюзу: `createTeam`, `listTeams` (видно команди без team-admin),
+  `adminSetTeamRole`, `createInvite(teamId, teamRole, maxRedemptions)`. Team-admin: `createTeamInvite`
+  (multi-use, лише у свою команду), `listTeamMembers`, `setTeamRole`, `removeTeamMember`,
+  `listTeamBindings`, `revokeTeamBinding`.
+- **Alias-адресати** `alias:all|admin|dir:<id>|login:<id>` у `sendTextMessage`. Прив'язка — через
+  `requestGroupClaim(alias)` (той самий claim-флоу й anchor-модель). Alias резолвиться лише в команду
+  виклику; чужий/неіснуючий → `-32007` (anti-oracle).
+- **Coalescing за чатом:** `Notify:CoalesceWindowSeconds` (дефолт 300, `0` вимикає). Перше повідомлення —
+  одразу, наступні у вікні — одним у кінці вікна. Поставлене в чергу повертає `results: []`, `timestamp: 0`.
+  Нова мітка метрики `wsrpc.app.sends{result="coalesced"}`.
+- Новий код помилки **`-32013`** — команда мусить зберегти хоча б одного team-admin.
+
+### Changed
+
+- **Dedup групових send'ів — за чатом:** для send у рівно одну групу ключ `(groupId, messageId)` замість
+  `(identity, messageId)`; рядки чистяться за `Notify:DedupTtlHours` (дефолт 72). Per-identity dedup решти
+  send'ів незмінний.
+- Інвайти: `max_redemptions` (дефолт 1 — one-time поведінка незмінна) з атомарним інкрементом погашень.
+- Міграція durable-схеми **v8**: таблиці `teams`, `team_members`, `team_bindings`; колонки
+  `invites.team_id/team_role/max_redemptions/redemptions`, `group_claims.alias`. Наявні дані не змінюються.
 
 ## [2.2.0] — 2026-07-17
 

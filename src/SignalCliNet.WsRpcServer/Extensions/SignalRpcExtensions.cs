@@ -74,6 +74,8 @@ public static class SignalRpcExtensions
         // весь процес). TimeProvider/IDurableStore/IAbusePepperProvider беруться з AddAuthnCore/AddAdmissionCore.
         services.AddSingleton<InviteService>();
         services.AddSingleton<AbuseLogService>();
+        // Команди (add-team-notify): TeamService — singleton над IDurableStore (стан у SQLite, не в пам'яті).
+        services.AddSingleton<TeamService>();
         // Явна фабрика: soft-cap за замовчуванням (не покладаємось на резолв default-значення ctor-параметра
         // контейнером). Дефолт-політику cap винесе секція 2 (конфіг), поки — DefaultMaxPerWindow.
         services.AddSingleton(sp => new InviteRedemptionRateLimiter(sp.GetRequiredService<TimeProvider>()));
@@ -93,6 +95,7 @@ public static class SignalRpcExtensions
         services.AddScoped<ISignalOnboardingRpc, SignalOnboardingRpcAdapter>();
         services.AddScoped<ISignalAdminRpc, SignalAdminRpcAdapter>();
         services.AddScoped<ISignalGroupClaimRpc, SignalGroupClaimRpcAdapter>();
+        services.AddScoped<ISignalTeamRpc, SignalTeamRpcAdapter>();
         services.AddScoped<ISystemRpc, SystemRpcAdapter>();
 
         // Server-heartbeat (add-ops-observability, task 3.2): опції Server:Heartbeat (валідовані; interval
@@ -102,6 +105,15 @@ public static class SignalRpcExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<HeartbeatOptions>, HeartbeatOptionsValidator>());
         services.AddHostedService<HeartbeatHostedService>();
+
+        // Командні сповіщення (add-team-notify): опції Notify (валідовані), coalescer за чатом (singleton —
+        // стан вікон на процес) і hosted-цикл flush + purge chat-scoped dedup.
+        services.AddOptionsWithValidateOnStart<NotifyOptions>()
+            .Bind(configuration.GetSection(NotifyOptions.SectionName));
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<NotifyOptions>, NotifyOptionsValidator>());
+        services.AddSingleton<ChatCoalescer>();
+        services.AddHostedService<ChatCoalescerHostedService>();
 
         // Server hosted service (плейн token-порт)
         services.AddHostedService<SignalRpcHostedService>();

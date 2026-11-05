@@ -74,6 +74,8 @@ dotnet run --project src/SignalCliNet.WsRpcServer
 | `Server:GroupClaim:MaxActiveBindingsPerIdentity` | `20` | Cap активних bindings на identity (footprint D2, 1..1000). Понад → `requestGroupClaim` = `-32008`. |
 | `Server:GroupClaim:ClaimRequestsPerHourPerIdentity` | `10` | Per-identity rate-cap `requestGroupClaim` за ковзну годину (1..1000). Понад → `-32005`. |
 | `Server:GroupClaim:MemberCacheTtlSeconds` | `60` | TTL кешу member-list групи для anchor-перевірки (T2, 5..3600). |
+| `Notify:CoalesceWindowSeconds` | `300` | Вікно coalescing'у за чатом (`add-team-notify`, 0..3600). Перше повідомлення в чат іде одразу, наступні у вікні — одним повідомленням у кінці вікна. `0` вимикає. Діє лише на shared-bot send у рівно одну групу. |
+| `Notify:DedupTtlHours` | `72` | Скільки тримати dedup-рядки `(groupId, messageId)` для групових send'ів (1..720). |
 
 Усе override-иться через environment (`Host.CreateDefaultBuilder`).
 

@@ -115,15 +115,11 @@ public sealed class DurableStoreDedupTests : IDisposable
     {
         var dbPath = Path.Combine(_dataDir, "v6.db");
 
-        // Ініціалізуємо повну схему, потім відкатуємо user_version до 6 (симуляція старої БД без v7).
-        using (var seed = NewStore("v6.db")) { }
-        SqliteConnection.ClearAllPools();
+        // Справжня v6-схема (міграції 1..6), без v7+ — симуляція старої БД.
         using (var raw = new SqliteConnection($"Data Source={dbPath};Pooling=False"))
         {
             raw.Open();
-            using var drop = raw.CreateCommand();
-            drop.CommandText = "DROP TABLE send_dedup; PRAGMA user_version = 6;";
-            drop.ExecuteNonQuery();
+            Assert.Equal(6, SchemaMigrator.Migrate(raw, NullLogger.Instance, targetVersion: 6));
         }
         SqliteConnection.ClearAllPools();
 

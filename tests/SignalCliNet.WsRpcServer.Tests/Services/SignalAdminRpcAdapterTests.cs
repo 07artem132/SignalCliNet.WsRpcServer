@@ -44,9 +44,11 @@ public sealed class SignalAdminRpcAdapterTests : IDisposable
         _tokens = new TokenService(new FakePepperProvider(Pepper), _store, _time, NullLogger<TokenService>.Instance);
         _audit = new AuditLogService(_store, _time, NullLogger<AuditLogService>.Instance);
         _adapter = new SignalAdminRpcAdapter(
-            _invites, _tokens, _audit, _store, Options.Create(new AdminOptions()), _time,
+            _invites, Teams(), _tokens, _audit, _store, Options.Create(new AdminOptions()), _time,
             NullLogger<SignalAdminRpcAdapter>.Instance);
     }
+
+    private TeamService Teams() => new(_store, _invites, _time, NullLogger<TeamService>.Instance);
 
     private static SignalPrincipal Admin() =>
         new("admin", isAdmin: true, hasFullAccess: false, [], []);
@@ -77,7 +79,7 @@ public sealed class SignalAdminRpcAdapterTests : IDisposable
     {
         var options = new AdminOptions { DefaultInviteTtlSeconds = 120, DefaultInviteMaxAttempts = 2 };
         var adapter = new SignalAdminRpcAdapter(
-            _invites, _tokens, _audit, _store, Options.Create(options), _time, NullLogger<SignalAdminRpcAdapter>.Instance);
+            _invites, Teams(), _tokens, _audit, _store, Options.Create(options), _time, NullLogger<SignalAdminRpcAdapter>.Instance);
         using var _ = SignalCallContext.Enter(Admin());
 
         var response = await adapter.CreateInvite();

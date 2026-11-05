@@ -18,6 +18,9 @@ public enum GroupClaimStatus
 
     /// <summary>The per-identity active-binding quota was exceeded (revoke some bindings first).</summary>
     QuotaExceeded,
+
+    /// <summary>Командний alias запитав не активний team-admin (add-team-notify) — відмова авторизації.</summary>
+    NotTeamAdmin,
 }
 
 /// <summary>
@@ -86,9 +89,36 @@ public sealed class GroupClaimService : IGroupClaimConfirmer
     /// </summary>
     /// <param name="identityId">The requesting identity (opaque; never a phone number).</param>
     /// <returns>The outcome and, on success, the plaintext code + expiry.</returns>
-    public GroupClaimResult RequestClaim(string identityId)
+    public GroupClaimResult RequestClaim(string identityId) => RequestClaim(identityId, alias: null);
+
+    /// <summary>
+    /// Mints a claim code; with <paramref name="alias"/> the confirmed binding becomes a TEAM binding
+    /// <c>(team, alias) → group</c> shared by every identity of the caller's team (add-team-notify).
+    /// </summary>
+    /// <remarks>
+    /// Командний alias може запитати лише активний team-admin: інакше будь-який учасник міг би перепривʼязати
+    /// <c>all</c> до чужої групи. Quota рахує активні командні прив'язки команди тим самим лімітом
+    /// <see cref="GroupClaimOptions.MaxActiveBindingsPerIdentity"/>.
+    /// </remarks>
+    /// <param name="identityId">Caller identity (з principal).</param>
+    /// <param name="alias">Валідний <see cref="TeamAlias"/> або <c>null</c> для per-identity binding.</param>
+    /// <returns>The outcome and, on success, the plaintext code.</returns>
+    public GroupClaimResult RequestClaim(string identityId, string? alias)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(identityId);
+        if (alias is not null && !TeamAlias.IsValid(alias))
+            throw new ArgumentException("Invalid team alias.", nameof(alias));
+
+        TeamMemberRecord? member = null;
+        if (alias is not null)
+        {
+            member = _store.GetTeamMember(identityId);
+            if (member is null || member.Revoked || member.TeamRole != TeamRoles.TeamAdmin)
+            {
+                _logger.LogInformation("requestGroupClaim(alias): identity {IdentityId} не активний team-admin.", identityId);
+                return new GroupClaimResult(GroupClaimStatus.NotTeamAdmin, null, null);
+            }
+        }
 
         // 1. Per-identity request rate-limit (griefing-burn budget) — окремо від quota.
         if (!_rateLimiter.TryAcquire(identityId))
@@ -99,8 +129,9 @@ public sealed class GroupClaimService : IGroupClaimConfirmer
 
         // 2. Per-identity quota активних (не revoked, не expired) bindings (footprint-cap, D2).
         var now = _timeProvider.GetUtcNow();
-        var activeBindings = _store.GetGroupBindingsForIdentity(identityId)
-            .Count(b => !b.Revoked && b.ExpiresAt > now);
+        var activeBindings = member is null
+            ? _store.GetGroupBindingsForIdentity(identityId).Count(b => !b.Revoked && b.ExpiresAt > now)
+            : _store.GetTeamBindings(member.TeamId).Count(b => !b.Revoked && b.ExpiresAt > now);
         if (activeBindings >= _options.MaxActiveBindingsPerIdentity)
         {
             _logger.LogInformation(
@@ -114,7 +145,7 @@ public sealed class GroupClaimService : IGroupClaimConfirmer
         var expiresAt = now + TimeSpan.FromMinutes(_options.ClaimTtlMinutes);
 
         // Прямий insert; дубль code_hash (астрономічно малоймовірний за 128-bit) спливе SqliteException'ом.
-        _store.InsertGroupClaim(new GroupClaimRecord(codeHash, identityId, Consumed: false, expiresAt, now));
+        _store.InsertGroupClaim(new GroupClaimRecord(codeHash, identityId, Consumed: false, expiresAt, now, alias));
 
         // НЕ логуємо код — лише факт видачі, identity й термін.
         _logger.LogInformation(
@@ -139,6 +170,28 @@ public sealed class GroupClaimService : IGroupClaimConfirmer
         var claim = _store.GetGroupClaim(codeHash);
         if (claim is null)
             return false; // захисний null-guard на випадок зовнішнього видалення
+
+        // Командний alias (add-team-notify): binding (team, alias) → group. Роль перевіряємо ще раз на confirm —
+        // за TTL коду емітента могли зняти з team-admin; тоді код погашено, але прав не дано.
+        if (claim.Alias is not null)
+        {
+            var member = _store.GetTeamMember(claim.CreatedBy);
+            if (member is null || member.Revoked || member.TeamRole != TeamRoles.TeamAdmin)
+            {
+                _logger.LogInformation(
+                    "group-claim(alias): емітент {IdentityId} більше не team-admin — прив'язку не створено.", claim.CreatedBy);
+                return false;
+            }
+
+            _store.UpsertTeamBinding(new TeamBindingRecord(
+                member.TeamId, claim.Alias, groupId, anchorAci, claim.CreatedBy,
+                ExpiresAt: now + TimeSpan.FromHours(_options.BindingTtlHours), Revoked: false, CreatedAt: now));
+
+            // Privacy: команда й група — опакові id; alias не логуємо (може нести id консьюмера).
+            _logger.LogInformation(
+                "group-claim підтверджено: командна прив'язка (команда {TeamId}, група {GroupId}).", member.TeamId, groupId);
+            return true;
+        }
 
         var binding = new GroupBindingRecord(
             BindingId: NewBindingId(),

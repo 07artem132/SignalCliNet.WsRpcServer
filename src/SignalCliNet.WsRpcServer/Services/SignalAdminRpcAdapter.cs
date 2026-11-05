@@ -25,6 +25,7 @@ namespace SignalCliNet.WsRpcServer.Services;
 /// </remarks>
 public sealed class SignalAdminRpcAdapter(
     InviteService inviteService,
+    TeamService teamService,
     TokenService tokenService,
     AuditLogService auditLog,
     IDurableStore store,
@@ -35,6 +36,8 @@ public sealed class SignalAdminRpcAdapter(
 {
     private readonly InviteService _inviteService =
         inviteService ?? throw new ArgumentNullException(nameof(inviteService));
+
+    private readonly TeamService _teamService = teamService ?? throw new ArgumentNullException(nameof(teamService));
 
     private readonly TokenService _tokenService = tokenService ?? throw new ArgumentNullException(nameof(tokenService));
 
@@ -52,7 +55,8 @@ public sealed class SignalAdminRpcAdapter(
 
     /// <inheritdoc />
     public Task<CreateInviteResponse> CreateInvite(
-        int? ttlSeconds = null, int? maxAttempts = null, CancellationToken cancellationToken = default)
+        int? ttlSeconds = null, int? maxAttempts = null, string? teamId = null, string? teamRole = null,
+        int maxRedemptions = 1, CancellationToken cancellationToken = default)
     {
         var actor = RequireAdminActor();
 
@@ -64,7 +68,26 @@ public sealed class SignalAdminRpcAdapter(
         if (cap < 1)
             throw new RpcErrorException(JsonRpcErrorCode.InvalidParams, "maxAttempts must be at least 1.");
 
-        var creation = _inviteService.Create(actor, ttl, cap);
+        // Командний інвайт (add-team-notify, break-glass): teamId і teamRole лише разом; multi-use — лише в команду.
+        if ((teamId is null) != (teamRole is null))
+            throw new RpcErrorException(JsonRpcErrorCode.InvalidParams, "teamId and teamRole must be given together.");
+        if (teamRole is not null && !TeamRoles.IsValid(teamRole))
+            throw new RpcErrorException(JsonRpcErrorCode.InvalidParams, "teamRole must be 'team-admin' or 'member'.");
+        if (maxRedemptions is < 1 or > SignalTeamRpcAdapter.MaxRedemptionsCap || (teamId is null && maxRedemptions != 1))
+            throw new RpcErrorException(JsonRpcErrorCode.InvalidParams, "maxRedemptions is out of range.");
+
+        InviteCreation creation;
+        if (teamId is null)
+        {
+            creation = _inviteService.Create(actor, ttl, cap);
+        }
+        else
+        {
+            var (status, teamInvite) = _teamService.CreateInviteForTeam(actor, teamId, ttl, cap, maxRedemptions, teamRole!);
+            SignalTeamRpcAdapter.ThrowOnFailure(status);
+            creation = teamInvite!;
+        }
+
 
         // Audit: подія invite_created (актор = admin, деталь = code_hash — ідентифікатор, не секрет).
         _auditLog.Append("invite_created", actor, creation.Record.CodeHash);
@@ -119,6 +142,48 @@ public sealed class SignalAdminRpcAdapter(
         _logger.LogInformation("Admin {Actor}: revoke binding {BindingId} identity {IdentityId}.",
             actor, bindingId, identityId);
         return Task.FromResult(new RevokeBindingResponse(bindingId, Revoked: true));
+    }
+
+    /// <inheritdoc />
+    public Task<CreateTeamResponse> CreateTeam(string name, CancellationToken cancellationToken = default)
+    {
+        var actor = RequireAdminActor();
+        if (string.IsNullOrWhiteSpace(name) || name.Trim().Length > 128)
+            throw new RpcErrorException(JsonRpcErrorCode.InvalidParams, "name must be 1..128 characters.");
+
+        var team = _teamService.CreateTeam(name);
+        _auditLog.Append("team_created", actor, team.Id);
+        return Task.FromResult(new CreateTeamResponse(team.Id, team.Name));
+    }
+
+    /// <inheritdoc />
+    public Task<ListTeamsResponse> ListTeams(CancellationToken cancellationToken = default)
+    {
+        RequireAdminActor();
+        var teams = _store.GetTeams()
+            .Select(t =>
+            {
+                var active = _store.GetTeamMembers(t.Id).Where(static m => !m.Revoked).ToList();
+                return new TeamInfo(t.Id, t.Name, active.Count, active.Count(static m => m.TeamRole == TeamRoles.TeamAdmin));
+            })
+            .ToList();
+        return Task.FromResult(new ListTeamsResponse(teams));
+    }
+
+    /// <inheritdoc />
+    public Task<TeamMemberInfo> AdminSetTeamRole(
+        string identityId, string teamRole, CancellationToken cancellationToken = default)
+    {
+        var actor = RequireAdminActor();
+        if (string.IsNullOrWhiteSpace(identityId))
+            throw new RpcErrorException(JsonRpcErrorCode.InvalidParams, "identityId cannot be empty.");
+        if (!TeamRoles.IsValid(teamRole))
+            throw new RpcErrorException(JsonRpcErrorCode.InvalidParams, "teamRole must be 'team-admin' or 'member'.");
+
+        SignalTeamRpcAdapter.ThrowOnFailure(_teamService.AdminSetTeamRole(identityId, teamRole));
+        _auditLog.Append("admin_team_role_changed", actor, $"{identityId}:{teamRole}");
+        _logger.LogInformation("Admin {Actor}: роль {IdentityId} → {Role} (break-glass).", actor, identityId, teamRole);
+        return Task.FromResult(new TeamMemberInfo(identityId, teamRole));
     }
 
     // Актор — admin identity id з call-context principal'а. На admin-порту principal завжди IsAdmin
