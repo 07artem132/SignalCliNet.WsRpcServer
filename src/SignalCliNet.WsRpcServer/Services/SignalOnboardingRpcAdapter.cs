@@ -99,6 +99,13 @@ public sealed class SignalOnboardingRpcAdapter(
         // Нова identity (role=user) — FK-передумова для device-секрету/токена.
         _store.UpsertIdentity(new IdentityRecord(newIdentityId, "user", [], now));
 
+        // Командний інвайт (add-team-notify): кожне погашення — окрема identity в команді інвайту з його роллю.
+        if (redemption.TeamId is not null && redemption.TeamRole is not null)
+        {
+            _store.InsertTeamMember(new TeamMemberRecord(
+                newIdentityId, redemption.TeamId, redemption.TeamRole, Revoked: false, now));
+        }
+
         string token;
         try
         {

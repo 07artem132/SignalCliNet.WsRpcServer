@@ -53,6 +53,12 @@ namespace SignalCliNet.WsRpcServer.Serialization;
 [JsonSerializable(typeof(ListBindingsResponse))]
 [JsonSerializable(typeof(GroupBindingInfo))]
 [JsonSerializable(typeof(RevokeBindingResponse))]
+// add-team-notify: non-secret відповіді команд (без кодів інвайтів і PII — лише id/ролі/лічильники).
+[JsonSerializable(typeof(CreateTeamResponse))]
+[JsonSerializable(typeof(ListTeamsResponse))]
+[JsonSerializable(typeof(TeamMemberInfo))]
+[JsonSerializable(typeof(ListTeamMembersResponse))]
+[JsonSerializable(typeof(ListTeamBindingsResponse))]
 // add-ops-observability: app-level notification payloads (heartbeat + pause-state) — БЕЗ секретів/PII (A1).
 [JsonSerializable(typeof(HeartbeatNotification))]
 [JsonSerializable(typeof(PauseStateNotification))]

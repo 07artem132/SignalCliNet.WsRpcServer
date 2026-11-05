@@ -71,6 +71,7 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
     // гейтить прапорцем); передається у chokepoint, який нулить його, якщо фіча вимкнена. Опційний:
     // мінімальні DI-провайдери (деякі DoD-тести без AddGroupClaimCore) → null (gate неактивний).
     private readonly GroupSendGate? _groupSendGate;
+    private readonly SignalCliNet.WsRpcServer.Services.ChatCoalescer? _chatCoalescer;
 
     private int _identitySlotHeld;              // 0/1 — тримаємо per-identity conn-слот (release рівно раз)
     private MessageRateLimiter? _msgRateLimiter; // per-connection token-bucket (msg-rate); null коли вимкнено
@@ -124,7 +125,8 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
         IOptions<AdmissionOptions> admissionOptions,
         TimeProvider timeProvider,
         IdempotentSendCoordinator idempotentCoordinator,
-        GroupSendGate? groupSendGate = null)
+        GroupSendGate? groupSendGate = null,
+        SignalCliNet.WsRpcServer.Services.ChatCoalescer? chatCoalescer = null)
         : base(server, logger, config)
     {
         _eventProcessor = eventProcessor ?? throw new ArgumentNullException(nameof(eventProcessor));
@@ -144,6 +146,7 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _idempotentCoordinator = idempotentCoordinator ?? throw new ArgumentNullException(nameof(idempotentCoordinator));
         _groupSendGate = groupSendGate;   // опційний (null у мінімальних DI-провайдерах)
+        _chatCoalescer = chatCoalescer;   // опційний (add-team-notify); сам нулиться в chokepoint, якщо вимкнено
 
         _authMachine = new SessionAuthStateMachine(_authOptions.Enabled);
 
@@ -330,8 +333,8 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
 
         // Транспортні ліміти (admission, tasks 3.2/3.3) — лише коли Admission:Enabled. Вимкнено ⇒ усі
         // нові параметри chokepoint'а null/0, тож поведінка ідентична попередній (опт-ін, як auth).
-        Func<string?, IReadOnlyList<string>, IdempotentSendOutcome>? beginSend = null;
-        Action<string, string>? completeSend = null;
+        Func<string?, IReadOnlyList<string>, string?, IdempotentSendOutcome>? beginSend = null;
+        Action<string, string, string?>? completeSend = null;
         SignalCliGate? gate = null;
         var maxInFlight = 0;
         if (_admissionOptions.Enabled)
@@ -357,10 +360,11 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
             // Координатор dedup+admission (task 3.3): dedup-lookup ПЕРЕД admission; на miss — admission +
             // атомарний pending-claim. Без messageId → чиста admission (поведінка незмінна).
             var admissionIdentity = _identityId ?? "loopback";
-            beginSend = (messageId, recipients) =>
-                _idempotentCoordinator.Begin(admissionIdentity, messageId, recipients);
-            completeSend = (messageId, resultJson) =>
-                _idempotentCoordinator.Complete(admissionIdentity, messageId, resultJson);
+            // dedupScope (add-team-notify): send у рівно одну групу → "chat:<groupId>" (dedup за чатом).
+            beginSend = (messageId, recipients, dedupScope) =>
+                _idempotentCoordinator.Begin(admissionIdentity, messageId, recipients, dedupScope);
+            completeSend = (messageId, resultJson, dedupScope) =>
+                _idempotentCoordinator.Complete(admissionIdentity, messageId, resultJson, dedupScope);
             gate = _signalCliGate;
             maxInFlight = _admissionOptions.MaxInFlightPerConnection;
         }
@@ -378,7 +382,8 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
             // groupSendGate — claim-гейт групових send'ів (сам нулиться в chokepoint, якщо GroupClaim вимкнено).
             JsonRpc = new AuthorizingSignalJsonRpc(
                 _messageHandler, principal, _policyRegistry, Logger, isCredentialLive, admitSends: null, gate,
-                maxInFlight, _groupSendGate, beginSend: beginSend, completeSend: completeSend);
+                maxInFlight, _groupSendGate, beginSend: beginSend, completeSend: completeSend,
+                chatCoalescer: _groupSendGate is null ? null : _chatCoalescer);
 
             // Configure JSON-RPC
             JsonRpc.CancelLocallyInvokedMethodsWhenConnectionIsClosed = true;

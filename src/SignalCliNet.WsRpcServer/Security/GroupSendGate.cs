@@ -100,6 +100,54 @@ public sealed class GroupSendGate
     }
 
     /// <summary>
+    /// Resolves and authorizes a team alias for <paramref name="callerIdentity"/> (add-team-notify): the caller
+    /// must be an active member of a team that has an active <c>(team, alias)</c> binding, and the binding's
+    /// anchor must still be a member of the group. Returns the decision and, when allowed, the resolved group.
+    /// </summary>
+    /// <remarks>
+    /// Anti-oracle: немає членства, немає прив'язки, чужа команда — однакова відмова <see cref="GroupSendDenyReason.NoBinding"/>.
+    /// Anchor вийшов → відмова + revoke командної прив'язки (T2), як для per-identity binding-у.
+    /// </remarks>
+    public async ValueTask<(GroupSendDecision Decision, string? GroupId)> EvaluateAliasAsync(
+        string callerIdentity, string account, string alias, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(callerIdentity);
+        ArgumentException.ThrowIfNullOrWhiteSpace(account);
+        ArgumentException.ThrowIfNullOrWhiteSpace(alias);
+
+        var now = _timeProvider.GetUtcNow();
+        var member = _store.GetTeamMember(callerIdentity);
+        var binding = member is null || member.Revoked ? null : _store.GetTeamBinding(member.TeamId, alias);
+        if (binding is null || binding.Revoked || binding.ExpiresAt <= now)
+        {
+            _logger.LogInformation("Send-gate: немає активної командної прив'язки для identity {IdentityId} → відмова.", callerIdentity);
+            return (GroupSendDecision.Deny(GroupSendDenyReason.NoBinding), null);
+        }
+
+        var membership = await _memberCache.CheckAsync(account, binding.GroupId, binding.AnchorAci, cancellationToken)
+            .ConfigureAwait(false);
+        switch (membership)
+        {
+            case GroupMembership.Member:
+                return (GroupSendDecision.Allow, binding.GroupId);
+
+            case GroupMembership.NotMember:
+                _store.RevokeTeamBinding(binding.TeamId, binding.Alias);
+                _memberCache.Invalidate(binding.GroupId);
+                _logger.LogInformation(
+                    "Send-gate: anchor не член групи {GroupId} — командну прив'язку інвалідовано (команда {TeamId}).",
+                    binding.GroupId, binding.TeamId);
+                return (GroupSendDecision.Deny(GroupSendDenyReason.AnchorNotMember), null);
+
+            default:
+                _logger.LogInformation(
+                    "Send-gate: членство anchor у групі {GroupId} невизначене (транзієнт) → відмова без revoke.",
+                    binding.GroupId);
+                return (GroupSendDecision.Deny(GroupSendDenyReason.MembershipUnknown), null);
+        }
+    }
+
+    /// <summary>
     /// Evaluates whether <paramref name="callerIdentity"/> may send to <paramref name="groupId"/> through
     /// the shared-bot <paramref name="account"/>: active binding + <c>anchorAci ∈ members(group)</c>.
     /// On a positively-not-a-member verdict the binding is revoked (T2).

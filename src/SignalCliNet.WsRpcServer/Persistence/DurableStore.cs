@@ -400,6 +400,17 @@ public sealed class DurableStore : IDurableStore, IDisposable
                     revokeBindings.ExecuteNonQuery();
                 }
 
+                // Каскад на членство в команді (add-team-notify): revoke identity адміном шлюзу дозволено ЗАВЖДИ
+                // (компрометація важливіша), навіть для останнього team-admin — команда тоді «без адміна».
+                using (var revokeMembership = _connection.CreateCommand())
+                {
+                    revokeMembership.Transaction = transaction;
+                    revokeMembership.CommandText =
+                        "UPDATE team_members SET revoked = 1 WHERE identity_id = $identity;";
+                    revokeMembership.Parameters.AddWithValue("$identity", identityId);
+                    revokeMembership.ExecuteNonQuery();
+                }
+
                 transaction.Commit();
                 return 0;
             });
@@ -575,8 +586,10 @@ public sealed class DurableStore : IDurableStore, IDisposable
                 command.CommandText =
                     """
                     INSERT INTO invites
-                        (code_hash, created_by, consumed, attempt_count, max_attempts, expires_at, consumed_by, created_at)
-                    VALUES ($hash, $createdBy, $consumed, $attempts, $maxAttempts, $expires, $consumedBy, $created);
+                        (code_hash, created_by, consumed, attempt_count, max_attempts, expires_at, consumed_by, created_at,
+                         team_id, team_role, max_redemptions, redemptions)
+                    VALUES ($hash, $createdBy, $consumed, $attempts, $maxAttempts, $expires, $consumedBy, $created,
+                            $teamId, $teamRole, $maxRedemptions, $redemptions);
                     """;
                 command.Parameters.AddWithValue("$hash", invite.CodeHash);
                 command.Parameters.AddWithValue("$createdBy", invite.CreatedBy);
@@ -586,6 +599,10 @@ public sealed class DurableStore : IDurableStore, IDisposable
                 command.Parameters.AddWithValue("$expires", FormatTimestamp(invite.ExpiresAt));
                 command.Parameters.AddWithValue("$consumedBy", (object?)invite.ConsumedBy ?? DBNull.Value);
                 command.Parameters.AddWithValue("$created", FormatTimestamp(invite.CreatedAt));
+                command.Parameters.AddWithValue("$teamId", (object?)invite.TeamId ?? DBNull.Value);
+                command.Parameters.AddWithValue("$teamRole", (object?)invite.TeamRole ?? DBNull.Value);
+                command.Parameters.AddWithValue("$maxRedemptions", invite.MaxRedemptions);
+                command.Parameters.AddWithValue("$redemptions", invite.Redemptions);
                 command.ExecuteNonQuery();
                 return 0;
             });
@@ -604,7 +621,8 @@ public sealed class DurableStore : IDurableStore, IDisposable
                 using var command = _connection.CreateCommand();
                 command.CommandText =
                     """
-                    SELECT created_by, consumed, attempt_count, max_attempts, expires_at, consumed_by, created_at
+                    SELECT created_by, consumed, attempt_count, max_attempts, expires_at, consumed_by, created_at,
+                           team_id, team_role, max_redemptions, redemptions
                     FROM invites WHERE code_hash = $hash;
                     """;
                 command.Parameters.AddWithValue("$hash", codeHash);
@@ -646,7 +664,8 @@ public sealed class DurableStore : IDurableStore, IDisposable
                     read.Transaction = transaction;
                     read.CommandText =
                         """
-                        SELECT created_by, consumed, attempt_count, max_attempts, expires_at, consumed_by, created_at
+                        SELECT created_by, consumed, attempt_count, max_attempts, expires_at, consumed_by, created_at,
+                           team_id, team_role, max_redemptions, redemptions
                         FROM invites WHERE code_hash = $hash;
                         """;
                     read.Parameters.AddWithValue("$hash", codeHash);
@@ -662,15 +681,20 @@ public sealed class DurableStore : IDurableStore, IDisposable
                     return false;
                 }
 
-                // 4. Умовний consume: виграє лише той, хто перевів consumed 0→1 (rows-affected==1).
+                // 4. Умовне погашення: виграє лише той, чий UPDATE пройшов при consumed=0 (rows-affected==1).
+                //    Multi-use (add-team-notify): redemptions+1; consumed=1 лише коли досягнуто max_redemptions.
+                //    Під _sync і в одній транзакції, тож паралельні погашення не перевищать стелю.
                 int consumed;
                 using (var claim = _connection.CreateCommand())
                 {
                     claim.Transaction = transaction;
                     claim.CommandText =
                         """
-                        UPDATE invites SET consumed = 1, consumed_by = $id
-                        WHERE code_hash = $hash AND consumed = 0;
+                        UPDATE invites
+                        SET redemptions = redemptions + 1,
+                            consumed = CASE WHEN redemptions + 1 >= max_redemptions THEN 1 ELSE 0 END,
+                            consumed_by = $id
+                        WHERE code_hash = $hash AND consumed = 0 AND redemptions < max_redemptions;
                         """;
                     claim.Parameters.AddWithValue("$id", consumedByIdentityId);
                     claim.Parameters.AddWithValue("$hash", codeHash);
@@ -872,7 +896,11 @@ public sealed class DurableStore : IDurableStore, IDisposable
             reader.GetInt32(3),
             ParseTimestamp(reader.GetString(4)),
             reader.IsDBNull(5) ? null : reader.GetString(5),
-            ParseTimestamp(reader.GetString(6)));
+            ParseTimestamp(reader.GetString(6)),
+            reader.IsDBNull(7) ? null : reader.GetString(7),
+            reader.IsDBNull(8) ? null : reader.GetString(8),
+            reader.GetInt32(9),
+            reader.GetInt32(10));
 
     /// <inheritdoc />
     public void InsertGroupClaim(GroupClaimRecord claim)
@@ -888,14 +916,15 @@ public sealed class DurableStore : IDurableStore, IDisposable
                 using var command = _connection.CreateCommand();
                 command.CommandText =
                     """
-                    INSERT INTO group_claims (code_hash, created_by, consumed, expires_at, created_at)
-                    VALUES ($hash, $createdBy, $consumed, $expires, $created);
+                    INSERT INTO group_claims (code_hash, created_by, consumed, expires_at, created_at, alias)
+                    VALUES ($hash, $createdBy, $consumed, $expires, $created, $alias);
                     """;
                 command.Parameters.AddWithValue("$hash", claim.CodeHash);
                 command.Parameters.AddWithValue("$createdBy", claim.CreatedBy);
                 command.Parameters.AddWithValue("$consumed", claim.Consumed ? 1 : 0);
                 command.Parameters.AddWithValue("$expires", FormatTimestamp(claim.ExpiresAt));
                 command.Parameters.AddWithValue("$created", FormatTimestamp(claim.CreatedAt));
+                command.Parameters.AddWithValue("$alias", (object?)claim.Alias ?? DBNull.Value);
                 command.ExecuteNonQuery();
                 return 0;
             });
@@ -913,7 +942,7 @@ public sealed class DurableStore : IDurableStore, IDisposable
             {
                 using var command = _connection.CreateCommand();
                 command.CommandText =
-                    "SELECT created_by, consumed, expires_at, created_at FROM group_claims WHERE code_hash = $hash;";
+                    "SELECT created_by, consumed, expires_at, created_at, alias FROM group_claims WHERE code_hash = $hash;";
                 command.Parameters.AddWithValue("$hash", codeHash);
                 using var reader = command.ExecuteReader();
                 if (!reader.Read())
@@ -924,7 +953,8 @@ public sealed class DurableStore : IDurableStore, IDisposable
                     reader.GetString(0),
                     reader.GetInt32(1) != 0,
                     ParseTimestamp(reader.GetString(2)),
-                    ParseTimestamp(reader.GetString(3)));
+                    ParseTimestamp(reader.GetString(3)),
+                    reader.IsDBNull(4) ? null : reader.GetString(4));
             });
         }
     }
@@ -1204,6 +1234,380 @@ public sealed class DurableStore : IDurableStore, IDisposable
             });
         }
     }
+
+    /// <inheritdoc />
+    public void InsertTeam(TeamRecord team)
+    {
+        ArgumentNullException.ThrowIfNull(team);
+
+        lock (_sync)
+        {
+            WithRetry(() =>
+            {
+                using var command = _connection.CreateCommand();
+                command.CommandText = "INSERT INTO teams (id, name, created_at) VALUES ($id, $name, $created);";
+                command.Parameters.AddWithValue("$id", team.Id);
+                command.Parameters.AddWithValue("$name", team.Name);
+                command.Parameters.AddWithValue("$created", FormatTimestamp(team.CreatedAt));
+                command.ExecuteNonQuery();
+                return 0;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public TeamRecord? GetTeam(string teamId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(teamId);
+
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                using var command = _connection.CreateCommand();
+                command.CommandText = "SELECT name, created_at FROM teams WHERE id = $id;";
+                command.Parameters.AddWithValue("$id", teamId);
+                using var reader = command.ExecuteReader();
+                return reader.Read()
+                    ? new TeamRecord(teamId, reader.GetString(0), ParseTimestamp(reader.GetString(1)))
+                    : null;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public IReadOnlyList<TeamRecord> GetTeams()
+    {
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                var teams = new List<TeamRecord>();
+                using var command = _connection.CreateCommand();
+                command.CommandText = "SELECT id, name, created_at FROM teams ORDER BY created_at, id;";
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                    teams.Add(new TeamRecord(reader.GetString(0), reader.GetString(1), ParseTimestamp(reader.GetString(2))));
+                return (IReadOnlyList<TeamRecord>)teams;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public void InsertTeamMember(TeamMemberRecord member)
+    {
+        ArgumentNullException.ThrowIfNull(member);
+
+        lock (_sync)
+        {
+            WithRetry(() =>
+            {
+                // Прямий INSERT: identity вже в команді = помилка (PK identity_id), не тиха заміна команди.
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    INSERT INTO team_members (identity_id, team_id, team_role, revoked, created_at)
+                    VALUES ($identity, $team, $role, $revoked, $created);
+                    """;
+                command.Parameters.AddWithValue("$identity", member.IdentityId);
+                command.Parameters.AddWithValue("$team", member.TeamId);
+                command.Parameters.AddWithValue("$role", member.TeamRole);
+                command.Parameters.AddWithValue("$revoked", member.Revoked ? 1 : 0);
+                command.Parameters.AddWithValue("$created", FormatTimestamp(member.CreatedAt));
+                command.ExecuteNonQuery();
+                return 0;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public TeamMemberRecord? GetTeamMember(string identityId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(identityId);
+
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    "SELECT team_id, team_role, revoked, created_at FROM team_members WHERE identity_id = $identity;";
+                command.Parameters.AddWithValue("$identity", identityId);
+                using var reader = command.ExecuteReader();
+                return reader.Read()
+                    ? new TeamMemberRecord(
+                        identityId, reader.GetString(0), reader.GetString(1), reader.GetInt32(2) != 0,
+                        ParseTimestamp(reader.GetString(3)))
+                    : null;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public IReadOnlyList<TeamMemberRecord> GetTeamMembers(string teamId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(teamId);
+
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                var members = new List<TeamMemberRecord>();
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    SELECT identity_id, team_role, revoked, created_at FROM team_members
+                    WHERE team_id = $team ORDER BY created_at, identity_id;
+                    """;
+                command.Parameters.AddWithValue("$team", teamId);
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                {
+                    members.Add(new TeamMemberRecord(
+                        reader.GetString(0), teamId, reader.GetString(1), reader.GetInt32(2) != 0,
+                        ParseTimestamp(reader.GetString(3))));
+                }
+
+                return (IReadOnlyList<TeamMemberRecord>)members;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public TeamMutationResult TrySetTeamRole(string identityId, string teamRole, bool enforceLastAdmin)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(identityId);
+        if (!TeamRoles.IsValid(teamRole))
+            throw new ArgumentException("Unknown team role.", nameof(teamRole));
+
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                using var transaction = _connection.BeginTransaction();
+                var result = MutateMember(transaction, identityId, demotes: teamRole != TeamRoles.TeamAdmin, enforceLastAdmin, _ =>
+                {
+                    using var update = _connection.CreateCommand();
+                    update.Transaction = transaction;
+                    update.CommandText = "UPDATE team_members SET team_role = $role WHERE identity_id = $identity;";
+                    update.Parameters.AddWithValue("$role", teamRole);
+                    update.Parameters.AddWithValue("$identity", identityId);
+                    update.ExecuteNonQuery();
+                });
+                transaction.Commit();
+                return result;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public TeamMutationResult TryRemoveTeamMember(string identityId, bool enforceLastAdmin)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(identityId);
+
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                using var transaction = _connection.BeginTransaction();
+                var result = MutateMember(transaction, identityId, demotes: true, enforceLastAdmin, _ =>
+                {
+                    using var update = _connection.CreateCommand();
+                    update.Transaction = transaction;
+                    update.CommandText = "UPDATE team_members SET revoked = 1 WHERE identity_id = $identity;";
+                    update.Parameters.AddWithValue("$identity", identityId);
+                    update.ExecuteNonQuery();
+                });
+                transaction.Commit();
+                return result;
+            });
+        }
+    }
+
+    // Спільне ядро зміни учасника: читає членство й кількість активних team-admin У ТІЙ САМІЙ транзакції
+    // під _sync, тож дві паралельні спроби зняти «одне одного» серіалізуються — друга бачить уже одного
+    // адміна і відмовляє (інваріант ≥1 team-admin, add-team-notify).
+    private TeamMutationResult MutateMember(
+        SqliteTransaction transaction, string identityId, bool demotes, bool enforceLastAdmin, Action<TeamMemberRecord> apply)
+    {
+        TeamMemberRecord? member;
+        using (var read = _connection.CreateCommand())
+        {
+            read.Transaction = transaction;
+            read.CommandText =
+                "SELECT team_id, team_role, revoked, created_at FROM team_members WHERE identity_id = $identity;";
+            read.Parameters.AddWithValue("$identity", identityId);
+            using var reader = read.ExecuteReader();
+            member = reader.Read()
+                ? new TeamMemberRecord(
+                    identityId, reader.GetString(0), reader.GetString(1), reader.GetInt32(2) != 0,
+                    ParseTimestamp(reader.GetString(3)))
+                : null;
+        }
+
+        if (member is null || member.Revoked)
+            return TeamMutationResult.NotFound;
+
+        if (enforceLastAdmin && demotes && member.TeamRole == TeamRoles.TeamAdmin)
+        {
+            using var count = _connection.CreateCommand();
+            count.Transaction = transaction;
+            count.CommandText =
+                """
+                SELECT COUNT(*) FROM team_members
+                WHERE team_id = $team AND team_role = $admin AND revoked = 0;
+                """;
+            count.Parameters.AddWithValue("$team", member.TeamId);
+            count.Parameters.AddWithValue("$admin", TeamRoles.TeamAdmin);
+            if (Convert.ToInt64(count.ExecuteScalar()) <= 1)
+                return TeamMutationResult.LastTeamAdmin;
+        }
+
+        apply(member);
+        return TeamMutationResult.Applied;
+    }
+
+    /// <inheritdoc />
+    public void UpsertTeamBinding(TeamBindingRecord binding)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+
+        lock (_sync)
+        {
+            WithRetry(() =>
+            {
+                // Один рядок на (team, alias): перепривʼязка атомарно замінює групу/anchor/TTL одним statement.
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    INSERT INTO team_bindings
+                        (team_id, alias, group_id, anchor_aci, bound_by, expires_at, revoked, created_at)
+                    VALUES ($team, $alias, $group, $anchor, $boundBy, $expires, $revoked, $created)
+                    ON CONFLICT (team_id, alias) DO UPDATE SET
+                        group_id = excluded.group_id,
+                        anchor_aci = excluded.anchor_aci,
+                        bound_by = excluded.bound_by,
+                        expires_at = excluded.expires_at,
+                        revoked = excluded.revoked,
+                        created_at = excluded.created_at;
+                    """;
+                command.Parameters.AddWithValue("$team", binding.TeamId);
+                command.Parameters.AddWithValue("$alias", binding.Alias);
+                command.Parameters.AddWithValue("$group", binding.GroupId);
+                command.Parameters.AddWithValue("$anchor", binding.AnchorAci);
+                command.Parameters.AddWithValue("$boundBy", binding.BoundBy);
+                command.Parameters.AddWithValue("$expires", FormatTimestamp(binding.ExpiresAt));
+                command.Parameters.AddWithValue("$revoked", binding.Revoked ? 1 : 0);
+                command.Parameters.AddWithValue("$created", FormatTimestamp(binding.CreatedAt));
+                command.ExecuteNonQuery();
+                return 0;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public TeamBindingRecord? GetTeamBinding(string teamId, string alias)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(teamId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(alias);
+
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    SELECT group_id, anchor_aci, bound_by, expires_at, revoked, created_at
+                    FROM team_bindings WHERE team_id = $team AND alias = $alias;
+                    """;
+                command.Parameters.AddWithValue("$team", teamId);
+                command.Parameters.AddWithValue("$alias", alias);
+                using var reader = command.ExecuteReader();
+                return reader.Read() ? ReadTeamBinding(teamId, alias, reader, 0) : null;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public IReadOnlyList<TeamBindingRecord> GetTeamBindings(string teamId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(teamId);
+
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                var bindings = new List<TeamBindingRecord>();
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    SELECT alias, group_id, anchor_aci, bound_by, expires_at, revoked, created_at
+                    FROM team_bindings WHERE team_id = $team ORDER BY alias;
+                    """;
+                command.Parameters.AddWithValue("$team", teamId);
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                    bindings.Add(ReadTeamBinding(teamId, reader.GetString(0), reader, 1));
+                return (IReadOnlyList<TeamBindingRecord>)bindings;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public void RevokeTeamBinding(string teamId, string alias)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(teamId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(alias);
+
+        lock (_sync)
+        {
+            WithRetry(() =>
+            {
+                using var command = _connection.CreateCommand();
+                command.CommandText = "UPDATE team_bindings SET revoked = 1 WHERE team_id = $team AND alias = $alias;";
+                command.Parameters.AddWithValue("$team", teamId);
+                command.Parameters.AddWithValue("$alias", alias);
+                command.ExecuteNonQuery();
+                return 0;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public int PurgeSendDedup(string scopePrefix, DateTimeOffset olderThan)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopePrefix);
+
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                // substr-префікс замість LIKE: identity_id може містити '%'/'_' (base64 group-id), LIKE їх тлумачив би.
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    DELETE FROM send_dedup
+                    WHERE substr(identity_id, 1, length($prefix)) = $prefix AND created_at < $before;
+                    """;
+                command.Parameters.AddWithValue("$prefix", scopePrefix);
+                command.Parameters.AddWithValue("$before", FormatTimestamp(olderThan));
+                return command.ExecuteNonQuery();
+            });
+        }
+    }
+
+    // Порядок колонок від offset: group_id, anchor_aci, bound_by, expires_at, revoked, created_at.
+    private static TeamBindingRecord ReadTeamBinding(string teamId, string alias, SqliteDataReader reader, int offset) =>
+        new(
+            teamId,
+            alias,
+            reader.GetString(offset),
+            reader.GetString(offset + 1),
+            reader.GetString(offset + 2),
+            ParseTimestamp(reader.GetString(offset + 3)),
+            reader.GetInt32(offset + 4) != 0,
+            ParseTimestamp(reader.GetString(offset + 5)));
 
     /// <inheritdoc />
     public void Backup(string destinationPath)

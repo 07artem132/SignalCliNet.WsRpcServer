@@ -19,6 +19,10 @@ namespace SignalCliNet.WsRpcServer.Persistence;
 /// <param name="ExpiresAt">Абсолютний термін дії (created + TTL); після нього redeem відмовляє.</param>
 /// <param name="ConsumedBy">Identity id, що погасив інвайт (<c>null</c> до consume).</param>
 /// <param name="CreatedAt">Час видачі (UTC).</param>
+/// <param name="TeamId">Команда, у яку погашення додає identity (add-team-notify); <c>null</c> — поза командою.</param>
+/// <param name="TeamRole">Командна роль нової identity (<see cref="TeamRoles"/>); <c>null</c> без команди.</param>
+/// <param name="MaxRedemptions">Скільки разів інвайт можна погасити (≥1; 1 = one-time, як раніше).</param>
+/// <param name="Redemptions">Скільки разів уже погашено; <see cref="Consumed"/>=1, коли досягнуто стелі.</param>
 public sealed record InviteRecord(
     string CodeHash,
     string CreatedBy,
@@ -27,4 +31,8 @@ public sealed record InviteRecord(
     int MaxAttempts,
     DateTimeOffset ExpiresAt,
     string? ConsumedBy,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    string? TeamId = null,
+    string? TeamRole = null,
+    int MaxRedemptions = 1,
+    int Redemptions = 0);

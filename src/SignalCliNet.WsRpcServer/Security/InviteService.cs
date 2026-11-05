@@ -19,7 +19,9 @@ public sealed record InviteCreation(string Code, InviteRecord Record);
 /// </summary>
 /// <param name="CreatedBy">Identity id of the admin that issued the redeemed invite.</param>
 /// <param name="CodeHash">The consumed invite's at-rest code hash (audit subject).</param>
-public sealed record InviteRedemption(string CreatedBy, string CodeHash);
+/// <param name="TeamId">Команда інвайту (add-team-notify), у яку треба додати нову identity; <c>null</c> — поза командою.</param>
+/// <param name="TeamRole">Командна роль нової identity; <c>null</c> без команди.</param>
+public sealed record InviteRedemption(string CreatedBy, string CodeHash, string? TeamId = null, string? TeamRole = null);
 
 /// <summary>
 /// Mints and redeems one-time invite codes — the Sybil-gate for identity onboarding (add-invites-admin,
@@ -78,26 +80,53 @@ public sealed class InviteService
     /// <param name="ttl">Time-to-live from now until the invite expires (&gt; 0).</param>
     /// <param name="maxAttempts">Per-code redeem-attempt cap (≥ 1); each attempt (even a failed one) counts (G12).</param>
     /// <returns>The plaintext code (returned once) and its persisted record.</returns>
-    public InviteCreation Create(string createdByIdentityId, TimeSpan ttl, int maxAttempts)
+    public InviteCreation Create(string createdByIdentityId, TimeSpan ttl, int maxAttempts) =>
+        Create(createdByIdentityId, ttl, maxAttempts, teamId: null, teamRole: null, maxRedemptions: 1);
+
+    /// <summary>
+    /// Mints an invite into team <paramref name="teamId"/> (add-team-notify): each of up to
+    /// <paramref name="maxRedemptions"/> redemptions creates a separate identity with <paramref name="teamRole"/>.
+    /// </summary>
+    /// <remarks>
+    /// Attempt-cap (G12) рахує й успішні погашення, тож для multi-use інвайту стеля спроб піднімається до
+    /// <c>maxAttempts + maxRedemptions</c>: інакше легітимні погашення з'їли б запас на помилки вводу.
+    /// </remarks>
+    /// <param name="createdByIdentityId">Емітент (admin шлюзу або team-admin).</param>
+    /// <param name="ttl">Термін дії (&gt; 0).</param>
+    /// <param name="maxAttempts">Запас спроб на помилки вводу (≥ 1).</param>
+    /// <param name="teamId">Команда; <c>null</c> — звичайний інвайт поза командою.</param>
+    /// <param name="teamRole">Роль у команді (обов'язкова, коли задано <paramref name="teamId"/>).</param>
+    /// <param name="maxRedemptions">Стеля погашень (≥ 1).</param>
+    /// <returns>The plaintext code (returned once) and its persisted record.</returns>
+    public InviteCreation Create(
+        string createdByIdentityId, TimeSpan ttl, int maxAttempts, string? teamId, string? teamRole, int maxRedemptions)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(createdByIdentityId);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(ttl, TimeSpan.Zero);
         ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxRedemptions, 1);
+        if ((teamId is null) != (teamRole is null) || (teamRole is not null && !TeamRoles.IsValid(teamRole)))
+            throw new ArgumentException("teamId and a valid teamRole must be given together.", nameof(teamRole));
+        if (teamId is null && maxRedemptions != 1)
+            throw new ArgumentOutOfRangeException(nameof(maxRedemptions), "Multi-use invites require a team.");
+
+        var attemptCap = maxRedemptions == 1 ? maxAttempts : checked(maxAttempts + maxRedemptions);
 
         var code = GenerateCode();
         var codeHash = ComputeCodeHash(code);
         var now = _timeProvider.GetUtcNow();
         var record = new InviteRecord(
-            codeHash, createdByIdentityId, Consumed: false, AttemptCount: 0, maxAttempts,
-            ExpiresAt: now + ttl, ConsumedBy: null, CreatedAt: now);
+            codeHash, createdByIdentityId, Consumed: false, AttemptCount: 0, attemptCap,
+            ExpiresAt: now + ttl, ConsumedBy: null, CreatedAt: now,
+            TeamId: teamId, TeamRole: teamRole, MaxRedemptions: maxRedemptions, Redemptions: 0);
 
         // Прямий insert; дубль code_hash (астрономічно малоймовірний за 128-bit) спливе SqliteException'ом.
         _store.InsertInvite(record);
 
         // НЕ логуємо код — лише факт видачі, емітента й термін.
         _logger.LogInformation(
-            "Видано інвайт (емітент {CreatedBy}, діє до {ExpiresAt:O}, cap спроб {MaxAttempts}).",
-            createdByIdentityId, record.ExpiresAt, maxAttempts);
+            "Видано інвайт (емітент {CreatedBy}, діє до {ExpiresAt:O}, cap спроб {MaxAttempts}, погашень {MaxRedemptions}, команда {TeamId}).",
+            createdByIdentityId, record.ExpiresAt, attemptCap, maxRedemptions, teamId);
         return new InviteCreation(code, record);
     }
 
@@ -134,7 +163,7 @@ public sealed class InviteService
             return null;
 
         _logger.LogInformation("Інвайт погашено (емітент {CreatedBy}).", invite.CreatedBy);
-        return new InviteRedemption(invite.CreatedBy, codeHash);
+        return new InviteRedemption(invite.CreatedBy, codeHash, invite.TeamId, invite.TeamRole);
     }
 
     /// <summary>

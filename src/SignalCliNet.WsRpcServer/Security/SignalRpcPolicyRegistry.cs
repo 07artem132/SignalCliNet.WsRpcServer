@@ -73,6 +73,15 @@ public sealed class SignalRpcPolicyRegistry : IRpcPolicyRegistry
         new() { Method = "listMyBindings", Kind = RpcPolicyKind.AccountCommand },
         new() { Method = "revokeMyBinding", Kind = RpcPolicyKind.AccountCommand },
 
+        // --- Команди (add-team-notify): caller identity з principal; права team-admin/членство перевіряє
+        // TeamService у сервісному шарі (не тут). createTeamInvite повертає секрет-код (reflection-DTO).
+        new() { Method = "createTeamInvite", Kind = RpcPolicyKind.AccountCommand },
+        new() { Method = "listTeamMembers", Kind = RpcPolicyKind.AccountCommand },
+        new() { Method = "setTeamRole", Kind = RpcPolicyKind.AccountCommand },
+        new() { Method = "removeTeamMember", Kind = RpcPolicyKind.AccountCommand },
+        new() { Method = "listTeamBindings", Kind = RpcPolicyKind.AccountCommand },
+        new() { Method = "revokeTeamBinding", Kind = RpcPolicyKind.AccountCommand },
+
         // --- Admin: лише IsAdmin-principal (mTLS admin-порт); не-admin → -32001 (add-invites-admin, 3.1) ---
         // createInvite(ttlSeconds?, maxAttempts?) — видача one-time інвайту (секрет-код у відповіді).
         new() { Method = "createInvite", Kind = RpcPolicyKind.Admin },
@@ -80,6 +89,11 @@ public sealed class SignalRpcPolicyRegistry : IRpcPolicyRegistry
         new() { Method = "revokeIdentity", Kind = RpcPolicyKind.Admin },
         // revokeBinding(identityId, bindingId) — хірургічний revoke ОДНОГО group-binding чужої identity.
         new() { Method = "revokeBinding", Kind = RpcPolicyKind.Admin },
+        // add-team-notify: створення команди, огляд команд (activeTeamAdmins = 0 → потрібен break-glass)
+        // і break-glass зміна ролі (інваріант ≥1 team-admin тримається й тут, -32013).
+        new() { Method = "createTeam", Kind = RpcPolicyKind.Admin },
+        new() { Method = "listTeams", Kind = RpcPolicyKind.Admin },
+        new() { Method = "adminSetTeamRole", Kind = RpcPolicyKind.Admin },
     ];
 
     private readonly FrozenDictionary<string, RpcMethodPolicy> _byMethod =

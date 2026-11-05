@@ -100,8 +100,14 @@ public sealed class IdempotentSendCoordinator(
     /// <param name="identityId">The sending identity (the dedup/budget key).</param>
     /// <param name="messageId">The client idempotency key, or <c>null</c>/empty for the legacy no-dedup path.</param>
     /// <param name="recipients">The send's recipients (never logged/stored here).</param>
+    /// <param name="dedupScope">
+    /// Optional dedup key overriding <paramref name="identityId"/> (add-team-notify): a send to exactly one
+    /// group uses <see cref="ChatScope"/> so the same <c>(groupId, messageId)</c> is sent once regardless of
+    /// which identity, team or alias addressed the chat. Admission/budget stay per <paramref name="identityId"/>.
+    /// </param>
     /// <returns>The coordinated outcome the chokepoint acts on.</returns>
-    public IdempotentSendOutcome Begin(string identityId, string? messageId, IReadOnlyList<string> recipients)
+    public IdempotentSendOutcome Begin(
+        string identityId, string? messageId, IReadOnlyList<string> recipients, string? dedupScope = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(identityId);
         ArgumentNullException.ThrowIfNull(recipients);
@@ -114,7 +120,8 @@ public sealed class IdempotentSendCoordinator(
         }
 
         // 1. Dedup-lookup ПЕРЕД admission (T6/C2).
-        var existing = _store.GetSendDedup(identityId, messageId);
+        var dedupKey = string.IsNullOrEmpty(dedupScope) ? identityId : dedupScope;
+        var existing = _store.GetSendDedup(dedupKey, messageId);
         if (existing is not null)
         {
             if (string.Equals(existing.Status, SendDedupRecord.StatusDone, StringComparison.Ordinal))
@@ -135,7 +142,7 @@ public sealed class IdempotentSendCoordinator(
             return IdempotentSendOutcome.FromDenied(decision);
 
         // 3. Бюджет зарезервовано → атомарний claim pending-рядка.
-        if (!_store.TryBeginSend(identityId, messageId, _timeProvider.GetUtcNow()))
+        if (!_store.TryBeginSend(dedupKey, messageId, _timeProvider.GetUtcNow()))
         {
             // Програна гонка claim-у (уже pending): форфейт нашої одиниці, outcome unknown (at-most-once).
             AppDiagnostics.Dedup(AppDiagnostics.DedupResult.HitPending);
@@ -152,6 +159,15 @@ public sealed class IdempotentSendCoordinator(
     /// <param name="identityId">The sending identity.</param>
     /// <param name="messageId">The client idempotency key.</param>
     /// <param name="resultJson">The serialized send result to persist.</param>
-    public void Complete(string identityId, string messageId, string resultJson) =>
-        _store.CompleteSend(identityId, messageId, resultJson);
+    /// <param name="dedupScope">The same scope passed to <see cref="Begin"/> (or <c>null</c>).</param>
+    public void Complete(string identityId, string messageId, string resultJson, string? dedupScope = null) =>
+        _store.CompleteSend(string.IsNullOrEmpty(dedupScope) ? identityId : dedupScope, messageId, resultJson);
+
+    /// <summary>Prefix of chat-scoped dedup keys; never collides with an identity id (no ':' in those).</summary>
+    public const string ChatScopePrefix = "chat:";
+
+    /// <summary>The dedup scope for a send to a single group chat.</summary>
+    /// <param name="groupId">The destination group id.</param>
+    /// <returns><c>chat:&lt;groupId&gt;</c>.</returns>
+    public static string ChatScope(string groupId) => ChatScopePrefix + groupId;
 }

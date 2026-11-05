@@ -16,10 +16,12 @@ namespace SignalCliNet.WsRpcServer.Persistence;
 /// <param name="CreatedBy">Identity id, що запросив claim (U); стане <c>identity_id</c> binding-у при confirm.</param>
 /// <param name="Consumed">Чи вже погашено claim (one-time: після consume confirm відмовляє).</param>
 /// <param name="ExpiresAt">Абсолютний термін дії (created + TTL); після нього confirm відмовляє.</param>
+/// <param name="Alias">Командний alias (add-team-notify): з ним confirm створює командну прив'язку; <c>null</c> — per-identity.</param>
 /// <param name="CreatedAt">Час видачі (UTC).</param>
 public sealed record GroupClaimRecord(
     string CodeHash,
     string CreatedBy,
     bool Consumed,
     DateTimeOffset ExpiresAt,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    string? Alias = null);

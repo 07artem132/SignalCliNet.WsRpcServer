@@ -19,9 +19,14 @@ public interface ISignalGroupClaimRpc : IRpcService
     /// Requests a fresh one-time claim code for the caller identity (T3: group-agnostic — no group argument).
     /// The caller pastes the returned code into the target group; the scanner fixes the group + anchor.
     /// </summary>
+    /// <param name="alias">
+    /// Optional team alias (add-team-notify: <c>all</c>, <c>admin</c>, <c>dir:&lt;id&gt;</c>, <c>login:&lt;id&gt;</c>).
+    /// When set, the confirmed binding is shared by the caller's whole team; only an active team-admin may
+    /// request it (otherwise <c>-32001</c>). Re-claiming the same alias atomically replaces its group.
+    /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The plaintext claim code (secret, once) and its expiry.</returns>
-    Task<GroupClaimResponse> RequestGroupClaim(CancellationToken cancellationToken = default);
+    Task<GroupClaimResponse> RequestGroupClaim(string? alias = null, CancellationToken cancellationToken = default);
 
     /// <summary>Lists the caller's OWN active group-bindings (self-management, task 2.6; no other identity's data).</summary>
     /// <param name="cancellationToken">Cancellation token.</param>

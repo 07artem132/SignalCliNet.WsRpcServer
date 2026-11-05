@@ -44,6 +44,7 @@ public class SignalMessageRpcAdapter(
         var recipientList = recipients?
             .Where(static r => !string.IsNullOrWhiteSpace(r))
             .Select(static r => ToRecipient(r))
+            .DistinctBy(static r => (r.IsGroup, r.Identifier))
             .ToList() ?? [];
 
         if (recipientList.Count == 0)
@@ -73,9 +74,20 @@ public class SignalMessageRpcAdapter(
 
     // Класифікація recipient'а: група (base64 group-id, не валідний user-id) → GroupRecipient; інакше
     // UserRecipient. «Не user-id» відсікає довгий E.164/username, який теоретично матчить group-регекс.
-    private static IRecipient ToRecipient(string raw) =>
-        RecipientValidator.IsValidGroupId(raw) &&
+    private static IRecipient ToRecipient(string raw)
+    {
+        // add-team-notify: alias-адресат мапиться ЛИШЕ через уже авторизований chokepoint'ом резолв
+        // (SignalCallContext). Нерезолвлений alias → -32602, ніколи не йде в signal-cli як «user».
+        if (TeamAlias.IsAliasRecipient(raw))
+        {
+            return SignalCallContext.ResolvedAliases is { } map && map.TryGetValue(raw.Trim(), out var groupId)
+                ? new GroupRecipient(groupId)
+                : throw new RpcErrorException(JsonRpcErrorCode.InvalidParams, "Recipient alias is not resolved.");
+        }
+
+        return RecipientValidator.IsValidGroupId(raw) &&
         !RecipientValidator.TryNormalizeUserRecipient(raw, out _, out _)
             ? new GroupRecipient(raw.Trim())
             : new UserRecipient(raw);
+    }
 }

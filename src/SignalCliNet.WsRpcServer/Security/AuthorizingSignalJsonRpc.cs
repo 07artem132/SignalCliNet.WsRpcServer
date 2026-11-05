@@ -6,6 +6,7 @@ using SignalCliNet.WsRpcServer.Security.Admission;
 using SignalCliNet.WsRpcServer.Security.Fail;
 using SignalCliNet.WsRpcServer.Security.Idempotency;
 using SignalCliNet.WsRpcServer.Serialization;
+using SignalCliNet.WsRpcServer.Services;
 using StreamJsonRpc;
 using StreamJsonRpc.Protocol;
 using WsRpcServer.Exceptions;
@@ -38,11 +39,12 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
     private readonly ILogger? _logger;
     private readonly Func<bool>? _isCredentialLive;
     private readonly Func<IReadOnlyList<string>, AdmissionDecision>? _admitSends;
-    private readonly Func<string?, IReadOnlyList<string>, IdempotentSendOutcome>? _beginSend;
-    private readonly Action<string, string>? _completeSend;
+    private readonly Func<string?, IReadOnlyList<string>, string?, IdempotentSendOutcome>? _beginSend;
+    private readonly Action<string, string, string?>? _completeSend;
     private readonly SignalCliGate? _signalCliGate;
     private readonly int _maxInFlight;
     private readonly GroupSendGate? _groupSendGate;
+    private readonly ChatCoalescer? _chatCoalescer;
 
     // Per-connection лічильник in-flight RPC (D12). Interlocked inc на вході dispatch / dec у finally.
     private int _inFlight;
@@ -92,8 +94,13 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
     /// </param>
     /// <param name="completeSend">
     /// Optional completion hook (task 3.3) invoked after a successful keyed send with
-    /// <c>(messageId, resultJson)</c> to mark the dedup row <c>done</c>. Paired with
-    /// <paramref name="beginSend"/>.
+    /// <c>(messageId, resultJson, dedupScope)</c> to mark the dedup row <c>done</c>. Paired with
+    /// <paramref name="beginSend"/>; <c>dedupScope</c> is <c>chat:&lt;groupId&gt;</c> for a send to exactly one
+    /// gated group (add-team-notify), otherwise <c>null</c> (per-identity).
+    /// </param>
+    /// <param name="chatCoalescer">
+    /// Optional per-chat coalescer (add-team-notify): a gated send to exactly one group that is not the first
+    /// in the chat's window is queued instead of dispatched. Ignored when disabled.
     /// </param>
     public AuthorizingSignalJsonRpc(
         IJsonRpcMessageHandler messageHandler,
@@ -105,8 +112,9 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
         SignalCliGate? signalCliGate = null,
         int maxInFlightPerConnection = 0,
         GroupSendGate? groupSendGate = null,
-        Func<string?, IReadOnlyList<string>, IdempotentSendOutcome>? beginSend = null,
-        Action<string, string>? completeSend = null)
+        Func<string?, IReadOnlyList<string>, string?, IdempotentSendOutcome>? beginSend = null,
+        Action<string, string, string?>? completeSend = null,
+        ChatCoalescer? chatCoalescer = null)
         : base(messageHandler)
     {
         _principal = principal ?? throw new ArgumentNullException(nameof(principal));
@@ -119,6 +127,7 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
         _signalCliGate = signalCliGate;
         _maxInFlight = maxInFlightPerConnection;
         _groupSendGate = groupSendGate is { Enabled: true } ? groupSendGate : null;
+        _chatCoalescer = chatCoalescer is { Enabled: true } ? chatCoalescer : null;
     }
 
     /// <inheritdoc />
@@ -181,8 +190,28 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
 
         // 2a. Group-claim send-gate (tasks 2.3/2.5): кожна група-таргет через shared-bot має мати активний
         //     binding + anchor ∈ members(G). Deny → -32007 (санітизовано, anti-oracle). Async (member-cache).
+        Dictionary<string, string>? resolvedAliases = null;
+        string? chatGroupId = null;
         if (groupSend is { } gs)
         {
+            // add-team-notify: alias-адресат → група команди виклику. Чужий/неіснуючий alias дає ту саму
+            // -32007, що й група без binding (anti-oracle). Лог — без alias і group-id (privacy, task 4.1).
+            foreach (var alias in gs.Aliases)
+            {
+                var (aliasDecision, aliasGroupId) = await _groupSendGate!
+                    .EvaluateAliasAsync(_principal.Name, gs.Account, alias, cancellationToken).ConfigureAwait(false);
+                if (!aliasDecision.Allowed || aliasGroupId is null)
+                {
+                    _logger?.LogInformation(
+                        "Chokepoint: alias-send {Method} відхилено send-gate'ом ({Reason}) → -32007",
+                        method, aliasDecision.Reason);
+                    return Error(
+                        request, (JsonRpcErrorCode)GroupClaimErrorCodes.SendDenied, GroupClaimErrorCodes.SendDeniedMessage);
+                }
+
+                (resolvedAliases ??= new Dictionary<string, string>(StringComparer.Ordinal))[TeamAlias.RecipientPrefix + alias] = aliasGroupId;
+            }
+
             foreach (var groupId in gs.Groups)
             {
                 var decision = await _groupSendGate!
@@ -196,7 +225,16 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
                         request, (JsonRpcErrorCode)GroupClaimErrorCodes.SendDenied, GroupClaimErrorCodes.SendDeniedMessage);
                 }
             }
+
+            // Рівно один чат-адресат (група/alias на ту саму групу) і жодного user-recipient → dedup і
+            // coalescing за чатом (add-team-notify): той самий (groupId, messageId) іде один раз незалежно від
+            // identity, команди чи alias.
+            var targets = gs.Groups.Concat(resolvedAliases?.Values ?? Enumerable.Empty<string>()).Distinct(StringComparer.Ordinal).ToList();
+            if (targets.Count == 1 && gs.UserRecipientCount == 0)
+                chatGroupId = targets[0];
         }
+
+        var dedupScope = chatGroupId is null ? null : IdempotentSendCoordinator.ChatScope(chatGroupId);
 
         // 2b. Admission + idempotency (W16, tasks 3.2/3.3/4.1): ЛИШЕ для send-like методів (політика несе
         //     recipients). Виконується ПІСЛЯ authz-політики й guard-ів (default-deny перший), ДО dispatch.
@@ -214,7 +252,7 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
                     ? null
                     : ExtractString(request, policy.MessageIdArgName, policy.MessageIdArgIndex);
 
-                var outcome = _beginSend(messageId, recipients);
+                var outcome = _beginSend(messageId, recipients, dedupScope);
                 switch (outcome.Kind)
                 {
                     case IdempotentSendKind.DedupDone:
@@ -267,6 +305,29 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
             }
         }
 
+        // 2c. Coalescing за чатом (add-team-notify): не перше повідомлення у вікні чату → у чергу, без dispatch.
+        //     Admission і dedup уже відпрацювали (повтор того самого messageId не потрапить у чергу двічі).
+        //     Клієнт отримує SendMessageResponse без results і з timestamp 0 = «поставлено в чергу».
+        if (isSendLike && chatGroupId is not null && _chatCoalescer is not null && policy.TextArgName is not null)
+        {
+            var text = ExtractString(request, policy.TextArgName, policy.TextArgIndex);
+            if (!string.IsNullOrEmpty(text)
+                && _chatCoalescer.TryCoalesce(groupSend!.Value.Account, chatGroupId, text) == CoalesceDecision.Queued)
+            {
+                var queued = new SendMessageResponse([], 0);
+                if (pendingMessageId is not null && _completeSend is not null)
+                {
+                    _completeSend(
+                        pendingMessageId,
+                        JsonSerializer.Serialize(queued, SignalCliSerializerContext.Default.SendMessageResponse),
+                        dedupScope);
+                }
+
+                AppDiagnostics.Send(AppDiagnostics.SendResult.Coalesced);
+                return new JsonRpcResult { RequestId = request.RequestId, Result = queued };
+            }
+        }
+
         // 3. Per-connection in-flight cap (D12) + server-wide G6-гейт до signal-cli — ЛИШЕ для не-Public
         //    методів (ping/handshake повз обидва). Обидва короткозамикають на -32005 (retry_after=1) без
         //    черги. Диспетч цільового методу — між акваєрами; principal у call-context на час виклику (V8).
@@ -300,7 +361,7 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
             }
 
             JsonRpcMessage response;
-            using (SignalCallContext.Enter(_principal))
+            using (SignalCallContext.Enter(_principal, resolvedAliases))
             {
                 response = await base.DispatchRequestAsync(request, targetMethod, cancellationToken).ConfigureAwait(false);
             }
@@ -320,7 +381,8 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
                     // Серіалізуємо збережений результат тим самим source-gen-контекстом → pending→done.
                     _completeSend(
                         pendingMessageId,
-                        JsonSerializer.Serialize(sent, SignalCliSerializerContext.Default.SendMessageResponse));
+                        JsonSerializer.Serialize(sent, SignalCliSerializerContext.Default.SendMessageResponse),
+                        dedupScope);
                 }
 
                 AppDiagnostics.Send(AppDiagnostics.SendResult.Ok);
@@ -384,7 +446,7 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
         {
             var recipients = ExtractStringList(request, policy.RecipientsArgName, policy.RecipientsArgIndex);
             if (isGatedGroupSend)
-                recipients = recipients.Where(static r => !LooksLikeGroup(r)).ToList();
+                recipients = recipients.Where(static r => !LooksLikeGroup(r) && !TeamAlias.TryParseRecipient(r, out _)).ToList();
             RecipientValidator.AssertValidUserRecipients(recipients);
         }
 
@@ -400,7 +462,8 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
     // Виявляє gated shared-bot group-send: group-claim увімкнено, метод несе account+recipients, акаунт —
     // shared-bot, і серед recipient'ів є хоча б одна валідна група. Повертає (account, groups) для async
     // send-gate; null → звичайний send-шлях (поведінка незмінна, коли фіча вимкнена).
-    private (string Account, List<string> Groups)? ResolveGroupSend(RpcMethodPolicy policy, JsonRpcRequest request)
+    private (string Account, List<string> Groups, List<string> Aliases, int UserRecipientCount)? ResolveGroupSend(
+        RpcMethodPolicy policy, JsonRpcRequest request)
     {
         if (_groupSendGate is null || policy.RecipientsArgName is null || policy.AccountArgName is null)
             return null;
@@ -415,7 +478,17 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
             .Select(static r => r.Trim())
             .ToList();
 
-        return groups.Count > 0 ? (account, groups) : null;
+        // add-team-notify: alias-адресати (alias:<alias>). Малформований alias лишається «user-recipient»
+        // і падає у RecipientValidator як -32602 (формат), а не -32007.
+        var aliases = new List<string>();
+        foreach (var r in recipients)
+        {
+            if (TeamAlias.TryParseRecipient(r, out var alias) && !aliases.Contains(alias, StringComparer.Ordinal))
+                aliases.Add(alias);
+        }
+
+        var userCount = recipients.Count(static r => !LooksLikeGroup(r) && !TeamAlias.TryParseRecipient(r, out _));
+        return groups.Count > 0 || aliases.Count > 0 ? (account, groups, aliases, userCount) : null;
     }
 
     // «Recipient — група»: валідний base64 group-id І НЕ валідний user-recipient (щоб довгий E.164/username

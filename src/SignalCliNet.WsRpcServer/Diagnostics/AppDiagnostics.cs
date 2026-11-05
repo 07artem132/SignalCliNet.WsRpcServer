@@ -66,6 +66,9 @@ public static class AppDiagnostics
 
         /// <summary>Дедупльовано (idempotency hit done) — повернуто збережений результат.</summary>
         Deduped,
+
+        /// <summary>Поставлено в чергу coalescing'у чату (add-team-notify) — піде одним повідомленням у кінці вікна.</summary>
+        Coalesced,
     }
 
     /// <summary>Idempotency-lookup: результат.</summary>
@@ -89,6 +92,7 @@ public static class AppDiagnostics
             SendResult.Denied => "denied",
             SendResult.Paused => "paused",
             SendResult.Deduped => "deduped",
+            SendResult.Coalesced => "coalesced",
             _ => "denied",
         }));
 

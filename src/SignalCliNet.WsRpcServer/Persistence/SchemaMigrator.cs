@@ -174,19 +174,68 @@ internal static class SchemaMigrator
                 PRIMARY KEY (identity_id, message_id)
             ) STRICT;
             """),
+
+        // v8 (add-team-notify): команди, членство (identity ≤ 1 команда), командні alias-прив'язки груп,
+        // multi-use інвайти у команду (team_id/team_role/max_redemptions/redemptions) і alias у claim-коді.
+        // Наявні інвайти отримують max_redemptions=1 → поведінка one-time незмінна. Dedup за чатом живе в
+        // send_dedup (identity_id = 'chat:<groupId>' — FK там немає), тож окремої таблиці не треба.
+        (8,
+            """
+            CREATE TABLE teams (
+                id          TEXT PRIMARY KEY,
+                name        TEXT NOT NULL,
+                created_at  TEXT NOT NULL
+            ) STRICT;
+
+            CREATE TABLE team_members (
+                identity_id  TEXT PRIMARY KEY REFERENCES identities(id) ON DELETE CASCADE,
+                team_id      TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+                team_role    TEXT NOT NULL,
+                revoked      INTEGER NOT NULL DEFAULT 0,
+                created_at   TEXT NOT NULL
+            ) STRICT;
+
+            CREATE INDEX ix_team_members_team ON team_members(team_id);
+
+            CREATE TABLE team_bindings (
+                team_id      TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+                alias        TEXT NOT NULL,
+                group_id     TEXT NOT NULL,
+                anchor_aci   TEXT NOT NULL,
+                bound_by     TEXT NOT NULL,
+                expires_at   TEXT NOT NULL,
+                revoked      INTEGER NOT NULL DEFAULT 0,
+                created_at   TEXT NOT NULL,
+                PRIMARY KEY (team_id, alias)
+            ) STRICT;
+
+            ALTER TABLE invites ADD COLUMN team_id TEXT;
+            ALTER TABLE invites ADD COLUMN team_role TEXT;
+            ALTER TABLE invites ADD COLUMN max_redemptions INTEGER NOT NULL DEFAULT 1;
+            ALTER TABLE invites ADD COLUMN redemptions INTEGER NOT NULL DEFAULT 0;
+
+            ALTER TABLE group_claims ADD COLUMN alias TEXT;
+            """),
     ];
 
     /// <summary>Migrates <paramref name="connection"/> up to <see cref="LatestVersion"/>.</summary>
     /// <param name="connection">An open connection.</param>
     /// <param name="logger">Logger for migration progress.</param>
     /// <returns>The resulting schema version.</returns>
-    public static int Migrate(SqliteConnection connection, ILogger logger)
+    public static int Migrate(SqliteConnection connection, ILogger logger) =>
+        Migrate(connection, logger, LatestVersion);
+
+    /// <summary>
+    /// Migrates up to <paramref name="targetVersion"/> only — lets tests build a REAL legacy schema (v6, v7…)
+    /// instead of hand-copied DDL, then check the upgrade path to <see cref="LatestVersion"/>.
+    /// </summary>
+    internal static int Migrate(SqliteConnection connection, ILogger logger, int targetVersion)
     {
         var current = GetUserVersion(connection);
 
         foreach (var (version, sql) in Migrations)
         {
-            if (current >= version)
+            if (current >= version || version > targetVersion)
                 continue;
 
             using var transaction = connection.BeginTransaction();
