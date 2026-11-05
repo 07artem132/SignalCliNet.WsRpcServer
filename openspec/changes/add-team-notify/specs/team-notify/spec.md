@@ -41,3 +41,20 @@ Recipient `alias:<alias>` у `sendTextMessage` SHALL резолвитись ли
 #### Scenario: team-admin видає інвайт
 - **WHEN** team-admin команди A викликає `createTeamInvite(maxRedemptions = 5)`
 - **THEN** інвайт погашається до 5 разів, і кожне identity потрапляє в команду A
+
+### Requirement: Команда не лишається без team-admin
+Team-RPC SHALL NOT залишати команду без активного `team-admin`: зняття ролі, self-revoke чи revoke
+останнього team-admin SHALL відмовляти `-32009`, перевірка і зміна — в одній транзакції. Адмін шлюзу
+SHALL завжди мати змогу видати інвайт `team-admin` або підвищити identity в будь-якій команді (audit).
+
+#### Scenario: останній team-admin знімає себе
+- **WHEN** єдиний team-admin команди викликає self-revoke
+- **THEN** `-32009`, роль і identity без змін
+
+#### Scenario: два team-admin знімають одне одного одночасно
+- **WHEN** у команді два team-admin, і кожен паралельно знімає роль з іншого
+- **THEN** рівно одна операція успішна, у команді лишається один team-admin
+
+#### Scenario: компрометація останнього team-admin
+- **WHEN** адмін шлюзу revoke-ить identity єдиного team-admin
+- **THEN** revoke проходить, команда позначена «без адміна» в audit і `listTeams`, адмін шлюзу видає новий інвайт `team-admin`

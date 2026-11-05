@@ -14,6 +14,7 @@
 ## 2. Команда й інвайти
 - [ ] 2.1 admin-RPC `createTeam`, `createInvite(teamId, maxRedemptions, role)`; дефолт 1 = нинішня поведінка
 - [ ] 2.1a team-RPC `createTeamInvite(maxRedemptions, ttl, role?)` для ролі `team-admin`, лише своя команда; через chokepoint
+- [ ] 2.1b `setTeamRole` для team-admin; інваріант ≥1 team-admin у транзакції (`-32009`); break-glass адміна шлюзу + audit; стан «без адміна» в `listTeams`
 - [ ] 2.2 `redeemInvite` створює identity в команді інвайту
 - [ ] 2.3 `requestGroupClaim(alias?)` → командний binding; перепривʼязка alias атомарна
 
