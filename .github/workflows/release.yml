@@ -171,16 +171,22 @@ jobs:
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: >
-          gh release create "$TAG"
-          --title "SignalCliNet.WsRpcServer $VERSION"
-          --generate-notes
-          "SignalCliNet.WsRpcServer-${VERSION}-linux-x64.tar.gz"
-          "SignalCliNet.WsRpcServer-${VERSION}-linux-arm64.tar.gz"
-          "SignalCliNet.WsRpcServer-${VERSION}-linux-x64-bundle.tar.gz"
-          "SignalCliNet.WsRpcServer-${VERSION}-linux-arm64-bundle.tar.gz"
-          "SignalCliNet.WsRpcServer-${VERSION}-win-x64.zip"
-          SHA256SUMS
+        # Ідемпотентно: якщо реліз під цей тег уже створено вручну (GitHub UI → Draft a new release),
+        # лише довантажуємо артефакти (--clobber), а не падаємо на "release already exists".
+        run: |
+          assets=(
+            "SignalCliNet.WsRpcServer-${VERSION}-linux-x64.tar.gz"
+            "SignalCliNet.WsRpcServer-${VERSION}-linux-arm64.tar.gz"
+            "SignalCliNet.WsRpcServer-${VERSION}-linux-x64-bundle.tar.gz"
+            "SignalCliNet.WsRpcServer-${VERSION}-linux-arm64-bundle.tar.gz"
+            "SignalCliNet.WsRpcServer-${VERSION}-win-x64.zip"
+            SHA256SUMS
+          )
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${assets[@]}" --clobber
+          else
+            gh release create "$TAG" --title "SignalCliNet.WsRpcServer $VERSION" --generate-notes "${assets[@]}"
+          fi
 
       - name: Upload workflow artifacts (manual run)
         if: github.event_name == 'workflow_dispatch'
