@@ -869,7 +869,10 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
         // (pre-auth сокет приймав лише authenticate → 4401), тож нова identity не могла з'явитися взагалі.
         // Потребує скалярний id (JSON-RPC 2.0: рядок або число; без нього нікуди повернути токен) і дозволений
         // рівно раз на сокет. Об'єкт/масив як id не повинен «з'їсти» одноразовий інвайт — такий кадр іде у 4401.
+        // Лише з AwaitingAuthenticate: кадр, що прийшов уже після close (Closed — напр. спрацював auth-таймер),
+        // не повинен витрачати інвайт, бо токен уже нікуди доставити.
         if (string.Equals(method, "redeemInvite", StringComparison.Ordinal) &&
+            state == SessionAuthState.AwaitingAuthenticate &&
             ackId is { ValueKind: JsonValueKind.String or JsonValueKind.Number } &&
             Interlocked.Exchange(ref _redeemAttempted, 1) == 0)
         {
