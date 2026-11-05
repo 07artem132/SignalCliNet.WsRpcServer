@@ -126,6 +126,11 @@ in-flight cap, server-wide гейт до signal-cli) — **опт-ін**, як �
 
 Коди відмов онбордингу через інвайт (`redeemInvite`, зміна `add-invites-admin`):
 
+Не-браузерний клієнт без токена відкриває сокет для `redeemInvite` із субпротоколом
+**`wsrpc-onboarding`** (інакше — `HTTP 401` до апгрейду); на такому сокеті дозволена **одна** спроба
+редемпшну (повторна → close `4401`), після чого той самий сокет може надіслати `authenticate` з новим
+токеном і пройти PoP.
+
 - **`-32006`** — невалідний інвайт-код (невідомий / прострочений / уже погашений / понад attempt-cap).
   Однакова помилка на всі випадки (anti-oracle). `error.message` = `"Invite is invalid or has expired."`.
 - **`-32005`** — перевищено **м'який глобальний** rate-cap спроб редемпшну (дефолт **20/хв** на весь
@@ -175,23 +180,16 @@ integrity-check (пошкоджена БД → **відмова старту**) 
 (`PRAGMA user_version`). Data-dir захищено exclusive lockfile: **другий процес на тому ж каталозі
 не стартує** (G1, `replicas=1`).
 
-## Receive-mode (гейтиться `Server:GroupClaim:Enabled`)
+## Receive-mode
 
-Режим receive **прив'язаний до прапорця group-claim** (R3.1 скасовує send-only передумову V2):
+З 2.1.0 receive-mode **розв'язаний із group-claim**:
 
-- **`Server:GroupClaim:Enabled=false` (дефолт)** — signal-cli стартує у **`--receive-mode=manual`**
-  (`UseManualReceiveMode=true`, send-only). Демон **не** receive-ить вхідні за всі акаунти. Наслідок:
-  щойно-злінкований власний номер може мати порожній/stale `listGroups`, доки не пройде sync через
-  receive. Це очікувана поведінка Фази-1, а не баг.
-- **`Server:GroupClaim:Enabled=true`** — сервер вмикає **безперервний авто-receive**
-  (`--receive-mode=on-start`), бо це потрібно, щоб код-сканер груп-claim матчив коди у вхідному потоці.
-  Head-of-line-ефект спільного stdout-loop (Уточнення-3) знімається **окремим non-blocking споживачем**
-  (сканер) — повільний скан не блокує RPC-відповіді.
-
-> **G7 (link-sessions, task 5).** Коли group-claim вимкнено, після `finishLink` нового номера
-> `listGroups(account)` може бути **порожнім/stale до першого receive** — link-sessions свідомо НЕ робить
-> one-shot receive/sync. З увімкненим group-claim демон receive-ить безперервно, тож групи підтягуються
-> без ручного receive.
+- **`SignalCli:ContinuousReceive=true` (дефолт)** — signal-cli стартує у **`--receive-mode=on-start`**:
+  демон тримає receive-websocket до Signal неперервно, тож вхідні повідомлення (`signal.textMessage`
+  тощо) доходять до підписаних клієнтів, а linked-device синкає групи/контакти.
+- **`SignalCli:ContinuousReceive=false`** — opt-in send-only (`--receive-mode=manual`).
+- **`Server:GroupClaim:Enabled=true`** форсує continuous незалежно від ключа вище (сканеру claim-кодів
+  потрібен вхідний потік). Head-of-line-ефект спільного stdout-loop знімає окремий non-blocking споживач.
 
 ## Контейнер
 
