@@ -44,12 +44,12 @@ Recipient `alias:<alias>` у `sendTextMessage` SHALL резолвитись ли
 
 ### Requirement: Команда не лишається без team-admin
 Team-RPC SHALL NOT залишати команду без активного `team-admin`: зняття ролі, self-revoke чи revoke
-останнього team-admin SHALL відмовляти `-32009`, перевірка і зміна — в одній транзакції. Адмін шлюзу
+останнього team-admin SHALL відмовляти `-32013`, перевірка і зміна — в одній транзакції. Адмін шлюзу
 SHALL завжди мати змогу видати інвайт `team-admin` або підвищити identity в будь-якій команді (audit).
 
 #### Scenario: останній team-admin знімає себе
 - **WHEN** єдиний team-admin команди викликає self-revoke
-- **THEN** `-32009`, роль і identity без змін
+- **THEN** `-32013`, роль і identity без змін
 
 #### Scenario: два team-admin знімають одне одного одночасно
 - **WHEN** у команді два team-admin, і кожен паралельно знімає роль з іншого
