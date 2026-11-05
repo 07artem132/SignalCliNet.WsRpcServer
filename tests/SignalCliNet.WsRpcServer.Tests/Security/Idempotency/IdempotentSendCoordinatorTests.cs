@@ -132,6 +132,51 @@ public sealed class IdempotentSendCoordinatorTests : IDisposable
         }
     }
 
+    // ---------- add-team-notify: dedup за чатом ----------
+
+    [Fact]
+    public void ChatScope_SameGroupAndMessageId_FromTwoIdentities_SentOnce_SameResult()
+    {
+        var h = NewHarness();
+        h.Store.UpsertIdentity(new IdentityRecord("id-2", "user", [], FixedTime));
+        var scope = IdempotentSendCoordinator.ChatScope("grp-1");
+
+        // Вкладка X (id-1): перший send у чат → pending → done.
+        Assert.Equal(IdempotentSendKind.AdmittedPending, h.Coordinator.Begin("id-1", "msg-1", ["grp-1"], scope).Kind);
+        h.Coordinator.Complete("id-1", "msg-1", "{\"first\":true}", scope);
+
+        // Вкладка Y (id-2) з тим самим messageId у той самий чат → результат першого, без повторного send.
+        var second = h.Coordinator.Begin("id-2", "msg-1", ["grp-1"], scope);
+        Assert.Equal(IdempotentSendKind.DedupDone, second.Kind);
+        Assert.Equal("{\"first\":true}", second.SavedResultJson);
+        Assert.Null(h.Store.GetSendDedup("id-1", "msg-1"));   // ключ — чат, не identity
+    }
+
+    [Fact]
+    public void ChatScope_DifferentChats_AreIndependent()
+    {
+        var h = NewHarness();
+
+        Assert.Equal(IdempotentSendKind.AdmittedPending,
+            h.Coordinator.Begin("id-1", "msg-1", ["grp-1"], IdempotentSendCoordinator.ChatScope("grp-1")).Kind);
+        Assert.Equal(IdempotentSendKind.AdmittedPending,
+            h.Coordinator.Begin("id-1", "msg-1", ["grp-2"], IdempotentSendCoordinator.ChatScope("grp-2")).Kind);
+    }
+
+    [Fact]
+    public void PurgeSendDedup_RemovesOnlyStaleChatRows()
+    {
+        var h = NewHarness();
+        h.Coordinator.Begin("id-1", "msg-1", ["grp-1"], IdempotentSendCoordinator.ChatScope("grp-1"));
+        h.Coordinator.Begin("id-1", "msg-2", ["+r1"]);   // per-identity рядок — purge його не чіпає
+
+        Assert.Equal(0, h.Store.PurgeSendDedup(IdempotentSendCoordinator.ChatScopePrefix, FixedTime));
+        Assert.Equal(1, h.Store.PurgeSendDedup(IdempotentSendCoordinator.ChatScopePrefix, FixedTime.AddSeconds(1)));
+
+        Assert.Null(h.Store.GetSendDedup(IdempotentSendCoordinator.ChatScope("grp-1"), "msg-1"));
+        Assert.NotNull(h.Store.GetSendDedup("id-1", "msg-2"));
+    }
+
     // Відкриває НОВИЙ координатор/стор поверх тієї ж durable БД (симуляція рестарту процесу).
     private (IdempotentSendCoordinator, DurableStore, ReserveThenSendBudget) RestartOverSameDb()
     {

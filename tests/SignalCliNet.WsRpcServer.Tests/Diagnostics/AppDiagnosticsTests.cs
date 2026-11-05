@@ -37,7 +37,7 @@ public sealed class AppDiagnosticsTests
     }
 
     [Fact]
-    public void Sends_TaggedByResult_AllFourVariants()
+    public void Sends_TaggedByResult_AllVariants()
     {
         var captured = Capture(() =>
         {
@@ -45,6 +45,7 @@ public sealed class AppDiagnosticsTests
             AppDiagnostics.Send(AppDiagnostics.SendResult.Denied);
             AppDiagnostics.Send(AppDiagnostics.SendResult.Paused);
             AppDiagnostics.Send(AppDiagnostics.SendResult.Deduped);
+            AppDiagnostics.Send(AppDiagnostics.SendResult.Coalesced);
         });
 
         var sends = captured.Where(c => c.Instrument == "wsrpc.app.sends").ToList();
@@ -52,6 +53,7 @@ public sealed class AppDiagnosticsTests
         Assert.Contains(sends, c => HasTag(c, "result", "denied"));
         Assert.Contains(sends, c => HasTag(c, "result", "paused"));
         Assert.Contains(sends, c => HasTag(c, "result", "deduped"));
+        Assert.Contains(sends, c => HasTag(c, "result", "coalesced"));
     }
 
     [Fact]

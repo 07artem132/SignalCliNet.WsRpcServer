@@ -44,3 +44,8 @@ internal sealed partial class GlobalPauseOptionsValidator : IValidateOptions<Glo
 // Межове правило (IntervalSeconds 1..24 — строго &lt;25с, C5) — через [Range]. Крос-правил немає.
 [OptionsValidator]
 internal sealed partial class HeartbeatOptionsValidator : IValidateOptions<HeartbeatOptions>;
+
+/// <summary>Compile-time validator for <see cref="NotifyOptions"/> (DataAnnotations [Range] bounds).</summary>
+// Межові правила (CoalesceWindowSeconds 0..3600, DedupTtlHours 1..720) — через [Range]. Крос-правил немає.
+[OptionsValidator]
+internal sealed partial class NotifyOptionsValidator : IValidateOptions<NotifyOptions>;

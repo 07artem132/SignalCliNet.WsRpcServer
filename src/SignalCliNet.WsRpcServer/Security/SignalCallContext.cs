@@ -18,11 +18,20 @@ public static class SignalCallContext
 {
     private static readonly AsyncLocal<SignalPrincipal?> CurrentPrincipal = new();
 
+    private static readonly AsyncLocal<IReadOnlyDictionary<string, string>?> CurrentAliases = new();
+
     /// <summary>
     /// The principal for the RPC invocation in flight on the current async context, or <c>null</c>
     /// outside a dispatch.
     /// </summary>
     public static SignalPrincipal? Principal => CurrentPrincipal.Value;
+
+    /// <summary>
+    /// Team-alias recipients (<c>alias:&lt;alias&gt;</c>) the chokepoint has already authorized and resolved to
+    /// group ids for the call in flight (add-team-notify), or <c>null</c> when the call carries none.
+    /// The adapter maps an alias recipient ONLY through this map — an unresolved alias never reaches signal-cli.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string>? ResolvedAliases => CurrentAliases.Value;
 
     /// <summary>
     /// Sets <paramref name="principal"/> as the ambient principal for the duration of the returned
@@ -31,20 +40,26 @@ public static class SignalCallContext
     /// </summary>
     /// <param name="principal">The principal to make ambient.</param>
     /// <returns>A scope that restores the previous ambient principal on dispose.</returns>
-    internal static Scope Enter(SignalPrincipal? principal)
+    internal static Scope Enter(SignalPrincipal? principal, IReadOnlyDictionary<string, string>? resolvedAliases = null)
     {
         var previous = CurrentPrincipal.Value;
+        var previousAliases = CurrentAliases.Value;
         CurrentPrincipal.Value = principal;
-        return new Scope(previous);
+        CurrentAliases.Value = resolvedAliases;
+        return new Scope(previous, previousAliases);
     }
 
     /// <summary>
     /// Restores the previously-ambient principal on dispose. A <c>readonly struct</c> so entering the
     /// context allocates nothing on the heap.
     /// </summary>
-    internal readonly struct Scope(SignalPrincipal? previous) : IDisposable
+    internal readonly struct Scope(SignalPrincipal? previous, IReadOnlyDictionary<string, string>? previousAliases) : IDisposable
     {
         /// <inheritdoc />
-        public void Dispose() => CurrentPrincipal.Value = previous;
+        public void Dispose()
+        {
+            CurrentPrincipal.Value = previous;
+            CurrentAliases.Value = previousAliases;
+        }
     }
 }

@@ -39,14 +39,22 @@ public sealed class SignalGroupClaimRpcAdapter(
         logger ?? throw new ArgumentNullException(nameof(logger));
 
     /// <inheritdoc />
-    public Task<GroupClaimResponse> RequestGroupClaim(CancellationToken cancellationToken = default)
+    public Task<GroupClaimResponse> RequestGroupClaim(string? alias = null, CancellationToken cancellationToken = default)
     {
         RequireEnabled();
         var identity = RequireIdentity();
 
-        var result = _claimService.RequestClaim(identity);
+        // Командний alias (add-team-notify): формат валідуємо на межі RPC (InvalidParams), права — сервіс.
+        if (alias is not null && !TeamAlias.IsValid(alias))
+            throw new RpcErrorException(JsonRpcErrorCode.InvalidParams, "alias is not a valid team alias.");
+
+        var result = _claimService.RequestClaim(identity, alias);
         switch (result.Status)
         {
+            case GroupClaimStatus.NotTeamAdmin:
+                throw new RpcErrorException(
+                    (JsonRpcErrorCode)AccountIsolationGuard.UnauthorizedErrorCode, "Access denied.");
+
             case GroupClaimStatus.RateLimited:
                 throw new RpcErrorException(
                     (JsonRpcErrorCode)AdmissionErrorCodes.RateLimited,
