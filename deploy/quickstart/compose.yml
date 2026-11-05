@@ -1,0 +1,63 @@
+# Шлюз сповіщень однією командою: signal-cli + WsRpcServer + Caddy (TLS Let's Encrypt).
+# Зазвичай цей файл кладе й запускає install.sh; вручну: заповни .env і gateway.json, далі
+#   docker compose up -d --build
+#
+# Топологія: wsrpcserver НЕ публікується на хост (лише в compose-мережі), назовні — тільки Caddy на 80/443.
+# mTLS admin-порт (9443) слухає loopback усередині контейнера: адмініструй через
+#   docker compose exec wsrpcserver wsrpc-admin …
+services:
+  wsrpcserver:
+    build:
+      context: .
+      args:
+        WSRPC_VERSION: "${WSRPC_VERSION:?WSRPC_VERSION не задано в .env}"
+    image: signal-notify-gateway:${WSRPC_VERSION}
+    container_name: signal-notify-gateway
+    restart: unless-stopped
+    # Рівно один екземпляр на том: другий не стартує (exclusive lockfile). Не масштабуй (--scale).
+    # Дамп памʼяті міг би винести ключі й пеппери на диск.
+    ulimits:
+      core: 0
+    expose:
+      - "9000"
+    environment:
+      # Docker веде трафік на 0.0.0.0 контейнера. Не-loopback bind дозволений лише з явним opt-in і TLS попереду
+      # (TLS термінує Caddy в цій же мережі, порт 9000 на хост не публікується).
+      Server__Host: "0.0.0.0"
+      Server__Port: "9000"
+      Server__AllowNonLoopback: "true"
+      Server__Tls__Enabled: "true"
+    volumes:
+      # Привʼязаний пристрій Signal + SQLite-стор + авто-згенеровані секрети. Це і є бот: бекапь його.
+      - gateway-data:/data
+      # Налаштування шлюзу (auth, Origin розширення, ліміти). Після зміни: docker compose up -d
+      - ./gateway.json:/app/appsettings.Production.json:ro
+    healthcheck:
+      # Готовність = секрети провіжнено (lock → секрети → стор пройдено).
+      test: ["CMD-SHELL", "test -f /data/secrets/server.crt"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+
+  caddy:
+    image: caddy:2
+    container_name: signal-notify-proxy
+    restart: unless-stopped
+    depends_on:
+      wsrpcserver:
+        condition: service_healthy
+    environment:
+      DOMAIN: "${DOMAIN:?DOMAIN не задано в .env}"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  gateway-data:
+  caddy-data:
+  caddy-config:

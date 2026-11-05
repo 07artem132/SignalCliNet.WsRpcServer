@@ -1,0 +1,7 @@
+# Reverse-proxy шлюзу: Caddy сам отримує й поновлює сертифікат Let's Encrypt для $DOMAIN (порти 80/443
+# мають бути відкриті з інтернету, DNS A/AAAA домену — на цей сервер). WebSocket-апгрейд Caddy проксить
+# без додаткових налаштувань і не рве довгоживучі зʼєднання за таймаутом.
+{$DOMAIN} {
+	header Strict-Transport-Security "max-age=63072000"
+	reverse_proxy wsrpcserver:9000
+}

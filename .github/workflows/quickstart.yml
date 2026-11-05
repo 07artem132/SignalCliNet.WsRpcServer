@@ -1,0 +1,83 @@
+name: Quickstart
+
+# Наскрізна перевірка deploy/quickstart: install.sh збирає образ із ОСТАННЬОГО релізного бандла, піднімає
+# шлюз + Caddy, створює команду й інвайт team-admin, повторний запуск не дублює команду, а Origin-allowlist
+# пускає дозволене розширення й відхиляє чуже. Привʼязка номера (QR) потребує телефона — її пропускаємо
+# (--skip-link); Caddy не отримає сертифікат для .invalid-домену, але шлюз від цього не залежить.
+on:
+  push:
+    branches: [main, "claude/**"]
+    paths:
+      - "deploy/quickstart/**"
+      - ".github/workflows/quickstart.yml"
+  pull_request:
+    paths:
+      - "deploy/quickstart/**"
+      - ".github/workflows/quickstart.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quickstart-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quickstart:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      EXT_ID: abcdefghijklmnopabcdefghijklmnop
+      SN_DIR: /tmp/signal-notify
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+
+      - name: Lint scripts
+        run: |
+          set -euo pipefail
+          shellcheck deploy/quickstart/install.sh deploy/quickstart/tools/signal-link
+          python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' deploy/quickstart/tools/wsrpc-admin
+
+      - name: install.sh (first run)
+        run: |
+          set -euo pipefail
+          sudo bash deploy/quickstart/install.sh --domain quickstart.invalid --extension-id "$EXT_ID" \
+            --team "CI команда" --dir "$SN_DIR" --skip-link | tee first.log
+          grep -q 'Створено команду' first.log
+          grep -Eq '^ +[0-9A-Z]{4}(-[0-9A-Z]{1,4})+$' first.log
+          grep -q "chrome-extension://$EXT_ID" first.log
+
+      - name: install.sh (re-run is idempotent)
+        run: |
+          set -euo pipefail
+          sudo bash deploy/quickstart/install.sh --domain quickstart.invalid \
+            --team "CI команда" --dir "$SN_DIR" --skip-link | tee second.log
+          grep -q 'Команда вже існує' second.log
+          test "$(sudo docker compose --project-directory "$SN_DIR" exec -T wsrpcserver wsrpc-admin teams | grep -c '"teamId"')" -eq 1
+
+      - name: Origin allowlist
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/origin.py" <<'EOF'
+          import asyncio, sys, websockets
+          async def probe(origin):
+              try:
+                  async with websockets.connect("ws://wsrpcserver:9000", origin=origin,
+                                                subprotocols=["potuzhnist.v1"], open_timeout=10):
+                      return "upgraded"
+              except websockets.exceptions.InvalidStatusCode as e:
+                  return f"http-{e.status_code}"
+          ok = asyncio.run(probe(sys.argv[1]))
+          bad = asyncio.run(probe("chrome-extension://zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"))
+          print("allowed:", ok, "| foreign:", bad)
+          sys.exit(0 if ok == "upgraded" and bad == "http-403" else 1)
+          EOF
+          sudo docker run --rm --network signal-notify_default -v "$RUNNER_TEMP/origin.py:/o.py:ro" \
+            --entrypoint python3 "signal-notify-gateway:$(sed -n 's/^WSRPC_VERSION=//p' "$SN_DIR/.env")" \
+            /o.py "chrome-extension://$EXT_ID"
+
+      - name: Logs on failure
+        if: failure()
+        run: sudo docker compose --project-directory "$SN_DIR" logs --no-color --tail 200 || true

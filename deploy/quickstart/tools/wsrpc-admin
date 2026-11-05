@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+"""wsrpc-admin — мінімальний клієнт mTLS admin-порту шлюзу (усередині контейнера).
+
+Admin-порт слухає лише loopback контейнера (wss://127.0.0.1:9443) і пускає тільки з admin client-cert,
+який сервер сам згенерував на томі (/data/secrets). Тому клієнт запускається всередині контейнера:
+
+    docker compose exec wsrpcserver wsrpc-admin ping
+    docker compose exec wsrpcserver wsrpc-admin accounts
+    docker compose exec wsrpcserver wsrpc-admin teams
+    docker compose exec wsrpcserver wsrpc-admin create-team "Назва"
+    docker compose exec wsrpcserver wsrpc-admin invite --team <teamId> --role team-admin
+    docker compose exec wsrpcserver wsrpc-admin set-role <identityId> team-admin
+    docker compose exec wsrpcserver wsrpc-admin revoke <identityId>
+
+Коди виходу: 0 успіх, 1 аргументи, 3 RPC-помилка сервера, 4 помилка зʼєднання/mTLS.
+Приватний ключ admin-сертифіката не друкується ніколи. Код інвайту друкується навмисно: його треба
+передати людині поза ботом.
+"""
+
+import argparse
+import asyncio
+import itertools
+import json
+import os
+import ssl
+import sys
+
+import websockets
+
+SECRETS = os.environ.get("WSRPC_SECRETS_DIR", "/data/secrets")
+URL = os.environ.get("WSRPC_ADMIN_URL", "wss://127.0.0.1:9443")
+
+
+class RpcError(Exception):
+    def __init__(self, code, message):
+        super().__init__(f"{code}: {message}")
+        self.code = code
+
+
+def tls_context():
+    ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH, cafile=os.path.join(SECRETS, "ca.crt"))
+    ctx.load_cert_chain(os.path.join(SECRETS, "admin-client.crt"), os.path.join(SECRETS, "admin-client.key"))
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    return ctx
+
+
+async def call(method, params):
+    ids = itertools.count(1)
+    async with websockets.connect(URL, ssl=tls_context(), open_timeout=15, max_size=1 << 20) as ws:
+        req_id = next(ids)
+        await ws.send(json.dumps({"jsonrpc": "2.0", "id": req_id, "method": method, "params": params}))
+        while True:
+            raw = await asyncio.wait_for(ws.recv(), timeout=30)
+            msg = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+            # Сервер може слати нотіфи (heartbeat тощо) — чекаємо саме на відповідь із нашим id.
+            if msg.get("id") != req_id:
+                continue
+            if "error" in msg:
+                err = msg["error"]
+                raise RpcError(err.get("code"), err.get("message"))
+            return msg.get("result")
+
+
+def main(argv):
+    p = argparse.ArgumentParser(prog="wsrpc-admin", description="Клієнт mTLS admin-порту шлюзу.")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("ping", help="перевірити admin-канал")
+    sub.add_parser("accounts", help="привʼязані номери Signal (і позначити непривʼязані як спільний бот)")
+    sub.add_parser("teams", help="список команд")
+    ct = sub.add_parser("create-team", help="створити команду")
+    ct.add_argument("name")
+    inv = sub.add_parser("invite", help="видати інвайт")
+    inv.add_argument("--team", help="teamId; без нього — інвайт без команди")
+    inv.add_argument("--role", choices=["team-admin", "member"], help="роль у команді (потрібна з --team)")
+    inv.add_argument("--max-redemptions", type=int, default=1, help="скільки пристроїв може погасити (1..1000)")
+    inv.add_argument("--ttl", type=int, help="строк дії, секунд (дефолт сервера — 1 доба)")
+    inv.add_argument("--max-attempts", type=int, help="ліміт спроб погашення")
+    sr = sub.add_parser("set-role", help="змінити роль identity в її команді")
+    sr.add_argument("identity_id")
+    sr.add_argument("role", choices=["team-admin", "member"])
+    rv = sub.add_parser("revoke", help="відкликати identity (усі токени й пристрій)")
+    rv.add_argument("identity_id")
+    a = p.parse_args(argv)
+
+    if a.cmd == "ping":
+        method, params = "ping", {}
+    elif a.cmd == "accounts":
+        method, params = "listAccounts", {}
+    elif a.cmd == "teams":
+        method, params = "listTeams", {}
+    elif a.cmd == "create-team":
+        method, params = "createTeam", {"name": a.name}
+    elif a.cmd == "invite":
+        if (a.team is None) != (a.role is None):
+            print("invite: --team і --role задаються разом", file=sys.stderr)
+            return 1
+        params = {"maxRedemptions": a.max_redemptions}
+        for key, value in (("teamId", a.team), ("teamRole", a.role), ("ttlSeconds", a.ttl), ("maxAttempts", a.max_attempts)):
+            if value is not None:
+                params[key] = value
+        method = "createInvite"
+    elif a.cmd == "set-role":
+        method, params = "adminSetTeamRole", {"identityId": a.identity_id, "teamRole": a.role}
+    else:
+        method, params = "revokeIdentity", {"identityId": a.identity_id}
+
+    try:
+        result = asyncio.run(call(method, params))
+    except RpcError as e:
+        print(f"Помилка сервера {e}", file=sys.stderr)
+        return 3
+    except (OSError, ssl.SSLError, asyncio.TimeoutError, websockets.exceptions.WebSocketException) as e:
+        print(f"Не вдалося підключитися до admin-порту {URL}: {e}", file=sys.stderr)
+        return 4
+
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
