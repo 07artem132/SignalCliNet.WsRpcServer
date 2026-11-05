@@ -21,6 +21,11 @@
   клієнт одразу шле `authenticate` новим токеном + PoP. Решта поведінки upgrade незмінна
   (без токена й без субпротоколу → `401`). Нові DoD-тести в `AuthnHandshakeDodTests`.
 
+### Security
+
+- `MessagePack` `2.5.302` → `2.5.307` (останній патч 2.5.x): закриває GHSA-qhrr-8q5h-9q3h (NU1902,
+  moderate), через яку червонів CI-гейт `dotnet list package --vulnerable`.
+
 ### Docs
 
 - `docs/self-host.md`: секцію receive-mode приведено у відповідність до 2.1.0 (дефолт `on-start`,
