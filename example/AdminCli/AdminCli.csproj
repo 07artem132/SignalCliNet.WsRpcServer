@@ -20,7 +20,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="StreamJsonRpc" Version="2.25.29" />
+    <PackageReference Include="StreamJsonRpc" Version="2.26.150" />
     <!-- Пін проти транзитивної вразливості StreamJsonRpc → MessagePack 2.5.192
          (GHSA-hv8m-jj95-wg3x); дзеркалить основний проєкт. Приклад використовує
          System.Text.Json-форматтер, не MessagePack — пін лише для чистого restore. -->
