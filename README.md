@@ -119,6 +119,17 @@
 
 ## 💻 Встановлення
 
+> **Сервер сповіщень однією командою.** Для команди, яка шле сповіщення в Signal-групи (зокрема з
+> Потужності), є готовий стек: шлюз із релізного бандла + Caddy з Let's Encrypt, привʼязка номера через QR
+> у терміналі, команда й інвайт першого team-admin:
+>
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/07artem132/SignalCliNet.WsRpcServer/main/deploy/quickstart/install.sh \
+>   | sudo bash -s -- --domain notify.example.com --extension-id <ID розширення> --team "Назва команди"
+> ```
+>
+> Інструкція: [`deploy/quickstart/README.md`](deploy/quickstart/README.md). Нижче — збірка з вихідного коду.
+
 ### 1. Завантаження та збірка з вихідного коду
 
 1. Клонуйте репозиторій:

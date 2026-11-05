@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Привʼязує номер Signal до шлюзу як linked device (бот-акаунт) і показує QR прямо в терміналі.
+#
+#   signal-link [назва-пристрою]
+#
+# Запускається ДО старту сервера (install.sh робить `docker compose run --rm wsrpcserver signal-link`):
+# signal-cli пише в той самий каталог стану, що й демон шлюзу, а демон підхоплює нові акаунти лише на старті.
+# Номер, привʼязаний так, не має власника в сторі шлюзу — тобто це СПІЛЬНИЙ бот, через який шлють команди
+# (finishLink від адміна натомість привʼязав би номер приватно до адміна).
+#
+# Посилання sgnl://linkdevice — секрет на ~2 хв: ми показуємо лише QR і не пишемо URI в лог.
+set -euo pipefail
+
+DEVICE_NAME="${1:-signal-notify}"
+CONFIG="${SignalCli__StoragePathCli:-/data/SignalCliStorageData}"
+LIB="${SignalCli__LibDirectory:-/app/signal-cli/lib}"
+JAVA="${SignalCli__JavaExecutable:-java}"
+mkdir -p "$CONFIG"
+
+echo "Відкрий Signal на телефоні: Налаштування → Привʼязані пристрої → «+» і відскануй QR."
+echo "QR дійсний ~2 хвилини. Якщо не встиг — просто запусти команду ще раз."
+echo
+
+# Так само, як шлюз запускає демон: java -cp <lib>/* org.asamk.signal.Main (без launcher-скрипта бандла).
+signal_cli() { "$JAVA" --enable-native-access=ALL-UNNAMED -cp "$LIB/*" org.asamk.signal.Main "$@"; }
+
+status=0
+while IFS= read -r line; do
+  case "$line" in
+    sgnl://*)
+      qrencode -t ANSIUTF8 -m 2 "$line"
+      echo "Чекаю на скан…"
+      ;;
+    __EXIT__*)
+      status="${line#__EXIT__}"
+      ;;
+    "Associated with:"*)
+      echo "Готово: номер привʼязано (${line#Associated with: })."
+      ;;
+    *)
+      [ -n "$line" ] && echo "$line"
+      ;;
+  esac
+done < <(rc=0; signal_cli --config "$CONFIG" link -n "$DEVICE_NAME" 2>&1 || rc=$?; echo "__EXIT__$rc")
+
+exit "$status"

@@ -5,6 +5,19 @@
 Формат базується на [Keep a Changelog](https://keepachangelog.com/uk/1.1.0/),
 а нумерація версій дотримується [семантичного версіонування](https://semver.org/lang/uk/).
 
+## [Unreleased]
+
+### Added
+
+- **Шлюз сповіщень однією командою** (`deploy/quickstart/`). `install.sh --domain … --extension-id … --team …`
+  ставить Docker за потреби, збирає образ із релізного бандла `linux-{x64,arm64}-bundle` (SHA-256 з
+  `SHA256SUMS`; без .NET SDK і токена до GitHub Packages), показує QR для привʼязки номера бота, піднімає
+  шлюз за Caddy з Let's Encrypt і видає інвайт першого team-admin. У образі: `signal-link` (привʼязка з QR у
+  терміналі) і `wsrpc-admin` (клієнт mTLS admin-порту: команди, інвайти, ролі, revoke). Номер привʼязується
+  до старту шлюзу напряму через signal-cli, тож він без власника в сторі — спільний бот, через який шлють
+  команди. Налаштування — `gateway.json` (auth, admission, group-claim, `AllowedOrigins` з
+  `chrome-extension://<id>`). CI-воркфлоу `quickstart.yml` збирає образ і проганяє admin-сценарій.
+
 ## [2.3.2] — 2026-11-05
 
 ### Added
