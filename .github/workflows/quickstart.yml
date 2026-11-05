@@ -6,7 +6,7 @@ name: Quickstart
 # (--skip-link); Caddy не отримає сертифікат для .invalid-домену, але шлюз від цього не залежить.
 on:
   push:
-    branches: [main]
+    branches: [main, "claude/**"]
     paths:
       - "deploy/quickstart/**"
       - ".github/workflows/quickstart.yml"
