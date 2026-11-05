@@ -5,6 +5,20 @@
 Формат базується на [Keep a Changelog](https://keepachangelog.com/uk/1.1.0/),
 а нумерація версій дотримується [семантичного версіонування](https://semver.org/lang/uk/).
 
+## [2.3.3] — 2026-11-05
+
+### Changed
+
+- **Оновлено залежності.** `JSON-RPC.NET` 2.8.0 → **2.8.1** (MessagePack 2.5.307, StreamJsonRpc 2.26.150),
+  `SignalCli.NET` 4.10.3 → **4.10.4** (Microsoft.Extensions 10.0.14), `StreamJsonRpc` 2.25.29 → **2.26.150**
+  (сам тягне MessagePack 2.5.307; пін лишається нижньою межею), `Microsoft.Extensions.*`, `Microsoft.Data.Sqlite`,
+  `System.IO.Hashing` → **10.0.14**, `SQLitePCLRaw.bundle_e_sqlite3` 2.1.12 → **2.1.14** (лінія 2.1.x), тестовий
+  тулінг (`Microsoft.NET.Test.Sdk` 18.11.0, `coverlet.collector` 10.1.0, `Moq` 4.21.0). Поведінка й wire-протокол
+  без змін.
+- **Docker: Temurin JDK 25+36 → 25.0.5+8** (`deploy/Dockerfile`, `deploy/Dockerfile.from-source`) — образ
+  більше не сидить на GA-збірці вересня 2025 без security-апдейтів. Архів тепер перевіряється SHA-256
+  (`TEMURIN_SHA256`) перед розпакуванням, `curl -f` падає на HTTP-помилці замість розпакування сторінки помилки.
+
 ## [2.3.2] — 2026-11-05
 
 ### Added
