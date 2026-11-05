@@ -37,8 +37,13 @@
 - **Адресація за alias у `sendTextMessage`.** Recipient виду `alias:<alias>` резолвиться в групу
   командного binding-у виклику; далі нинішній `GroupSendGate`. Чужий або неіснуючий alias дає ту саму
   відмову `-32007` (anti-oracle).
-- **Командний dedup.** Для alias-recipient ключ dedup = `(team, alias, messageId)` замість
-  `(identity, messageId)`: повтор з будь-якого пристрою команди повертає результат першого виклику.
+- **Dedup за чатом.** Для групового recipient ключ dedup = `(groupId, messageId)` — за чатом-адресатом,
+  а не за identity чи alias: повтор із будь-якого пристрою, команди чи alias, що веде в той самий чат,
+  повертає результат першого виклику. Нинішній `(identity, messageId)` лишається для прямих (не групових) recipient.
+- **Coalescing на шлюзі, за чатом.** Перше повідомлення в чат іде одразу; наступні в той самий чат у вікні
+  (`Notify:CoalesceWindowSeconds`, дефолт 300) копляться і йдуть одним повідомленням наприкінці вікна
+  (тексти через `; `). Кожен виклик одразу отримує результат «прийнято/об'єднано»; фінальний статус
+  доставки об'єднаного повідомлення — в audit. Вимкнення: `Notify:CoalesceWindowSeconds = 0`.
 - **Ретеншн:** фоновий purge dedup-рядків старших за TTL.
 
 ## Не змінюється
@@ -46,11 +51,11 @@
 - `sendTextMessage` для звичайних identity, вільний текст, адресація за group-id/номером.
 
 ## Відкриті рішення (для власника)
-1. Coalescing (об'єднання подій за 5 хв) — робити на шлюзі чи лишити клієнту?
+_(немає)_
 
 ## Вплив
 - Код: `Persistence/` (міграція: `teams`, `identities.team_id`, `invites.team_id/max_redemptions/redemptions`,
-  `team_bindings`, командний ключ у send-dedup), `Security/RecipientValidator` (`alias:`),
+  `team_bindings`, ключ send-dedup за чатом, coalescer), `Security/RecipientValidator` (`alias:`),
   `GroupSendGate` (резолв alias), admin-RPC `createTeam`/`createInvite(teamId, maxRedemptions, role)`, team-RPC `createTeamInvite`.
 - Specs: нова `team-notify`; MODIFIED `admin-and-invites` (multi-use інвайт у команду),
   `group-claim` (командний alias).
