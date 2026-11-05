@@ -4,7 +4,7 @@
 - [x] 0.1 `sendTextMessage` лишається для всіх; шлюз текст не фільтрує, межа = bindings (власник, 2026-11-05)
 - [x] 0.1a Перевірки «рівно двоє» в особистій групі немає (власник, 2026-11-05)
 - [ ] 0.2 Coalescing на шлюзі чи на клієнті
-- [ ] 0.3 Хто видає інвайти в команду: лише admin чи і team-admin
+- [x] 0.3 Інвайти в команду видає team-admin; admin створює команду і перший team-admin інвайт (власник, 2026-11-05)
 
 ## 1. Стор
 - [ ] 1.1 Міграція: `teams`, `identities.team_id`, `invites.team_id/max_redemptions/redemptions` (атомарний інкремент, W20)
@@ -12,7 +12,8 @@
 - [ ] 1.3 Командний ключ send-dedup `(team, alias, messageId)` + purge за TTL
 
 ## 2. Команда й інвайти
-- [ ] 2.1 admin-RPC `createTeam`, `createInvite(teamId, maxRedemptions)`; дефолт 1 = нинішня поведінка
+- [ ] 2.1 admin-RPC `createTeam`, `createInvite(teamId, maxRedemptions, role)`; дефолт 1 = нинішня поведінка
+- [ ] 2.1a team-RPC `createTeamInvite(maxRedemptions, ttl, role?)` для ролі `team-admin`, лише своя команда; через chokepoint
 - [ ] 2.2 `redeemInvite` створює identity в команді інвайту
 - [ ] 2.3 `requestGroupClaim(alias?)` → командний binding; перепривʼязка alias атомарна
 

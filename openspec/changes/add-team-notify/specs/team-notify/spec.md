@@ -29,3 +29,15 @@ Recipient `alias:<alias>` у `sendTextMessage` SHALL резолвитись ли
 #### Scenario: паралельні погашення на межі
 - **WHEN** інвайт з `maxRedemptions = 2` погашають три пристрої конкурентно
 - **THEN** рівно два identity в команді, третій отримує `-32006`
+
+### Requirement: Team-admin видає інвайти лише у свою команду
+`createTeamInvite` SHALL бути доступним лише ролі `team-admin` і SHALL створювати інвайт тільки в
+команду виклику. Іншим ролям → `-32001`.
+
+#### Scenario: member пробує видати інвайт
+- **WHEN** identity з роллю `member` викликає `createTeamInvite`
+- **THEN** `-32001`, інвайт не створено
+
+#### Scenario: team-admin видає інвайт
+- **WHEN** team-admin команди A викликає `createTeamInvite(maxRedemptions = 5)`
+- **THEN** інвайт погашається до 5 разів, і кожне identity потрапляє в команду A

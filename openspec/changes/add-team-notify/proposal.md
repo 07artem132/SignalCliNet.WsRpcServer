@@ -18,6 +18,10 @@
 - **Команда (team)** — нова durable-сутність. Identity належить не більше ніж одній команді.
   Інвайт отримує `teamId` і `maxRedemptions` (≥1, дефолт 1 = нинішня поведінка): кожне погашення
   створює окреме identity в цій команді (TOFU per-device лишається).
+- **Team-admin видає інвайти у свою команду.** Admin (mTLS) створює команду і перший інвайт із роллю
+  `team-admin`. Далі identity з роллю `team-admin` через звичайний WS (token + PoP) викликає
+  `createTeamInvite(maxRedemptions, ttl, role?)` лише у власну команду; роль `team-admin` у такому інвайті
+  може видати тільки team-admin. Інвайти в чужу команду або без команди → `-32001`.
 - **Командні alias прив'язок.** `requestGroupClaim(alias?)`: з `alias` binding стає командним
   `(team, alias) → group` і доступний усім identity команди; без `alias` — нинішній per-identity binding.
   Anchor-модель (T2), TTL і quota не змінюються. Перепривʼязка того ж alias атомарно замінює групу.
@@ -34,12 +38,11 @@
 
 ## Відкриті рішення (для власника)
 1. Coalescing (об'єднання подій за 5 хв) — робити на шлюзі чи лишити клієнту?
-2. Хто створює команду й видає в неї інвайти: лише admin-CLI чи також team-admin?
 
 ## Вплив
 - Код: `Persistence/` (міграція: `teams`, `identities.team_id`, `invites.team_id/max_redemptions/redemptions`,
   `team_bindings`, командний ключ у send-dedup), `Security/RecipientValidator` (`alias:`),
-  `GroupSendGate` (резолв alias), admin-RPC `createTeam`/`createInvite(teamId, maxRedemptions)`.
+  `GroupSendGate` (резолв alias), admin-RPC `createTeam`/`createInvite(teamId, maxRedemptions, role)`, team-RPC `createTeamInvite`.
 - Specs: нова `team-notify`; MODIFIED `admin-and-invites` (multi-use інвайт у команду),
   `group-claim` (командний alias).
 - Версія: minor (2.3.0), без breaking.
