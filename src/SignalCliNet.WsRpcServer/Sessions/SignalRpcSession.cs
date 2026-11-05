@@ -12,6 +12,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NetCoreServer;
 using SignalCliNet.WsRpcServer.Deployment;
+using SignalCliNet.WsRpcServer.Model;
 using SignalCliNet.WsRpcServer.Persistence;
 using SignalCliNet.WsRpcServer.Security;
 using SignalCliNet.WsRpcServer.Security.Admission;
@@ -49,6 +50,7 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
     private const int PreAuthMaxBytes = 4096;
 
     private readonly IRpcServiceRegistry _serviceRegistry;
+    private readonly IServiceProvider _serviceProvider;
     private readonly IEventProcessor _eventProcessor;
     private readonly IRpcPolicyRegistry _policyRegistry;
     private readonly Channel<RpcNotification> _notificationChannel;
@@ -93,10 +95,6 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
     // Токен-кандидат із upgrade — REDACT: ніколи не логувати; чистимо одразу після автентифікації.
     private string? _pendingToken;
 
-    // redeemInvite на pre-auth сокеті (онбординг без токена): одна спроба на з'єднання — повторна → close 4401.
-    // Перебір кодів через один сокет таким чином неможливий (поверх глобального soft rate-cap редемпшну).
-    private int _redeemAttempted;
-    private readonly IServiceProvider _serviceProvider;
     private string? _remoteIp;
     private int _unauthSlotHeld;           // 0/1 — тримаємо unauth-слот у per-IP cap (release рівно раз)
     private string? _tokenHash;            // at-rest hash активної token-сесії (для IsLive-перевірки)
@@ -144,6 +142,7 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
         _eventProcessor = eventProcessor ?? throw new ArgumentNullException(nameof(eventProcessor));
         _config = config ?? throw new ArgumentNullException(nameof(config));
         _serviceRegistry = serviceRegistry ?? throw new ArgumentNullException(nameof(serviceRegistry));
+        _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
         _policyRegistry = policyRegistry ?? throw new ArgumentNullException(nameof(policyRegistry));
         _authOptions = (authOptions ?? throw new ArgumentNullException(nameof(authOptions))).Value;
         _tokenService = tokenService ?? throw new ArgumentNullException(nameof(tokenService));
@@ -158,7 +157,6 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _idempotentCoordinator = idempotentCoordinator ?? throw new ArgumentNullException(nameof(idempotentCoordinator));
         _groupSendGate = groupSendGate;   // опційний (null у мінімальних DI-провайдерах)
-        _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
         _chatCoalescer = chatCoalescer;   // опційний (add-team-notify); сам нулиться в chokepoint, якщо вимкнено
 
         _authMachine = new SessionAuthStateMachine(_authOptions.Enabled);
@@ -869,63 +867,57 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
             return;
         }
 
-        // AwaitingAuthenticate: онбординг через інвайт (add-invites-admin). Це ЄДИНИЙ token-less RPC
-        // (політика IdentityOnboarding) — без цього гілки redeemInvite на Auth:Enabled=true був недосяжний
-        // (pre-auth сокет приймав лише authenticate → 4401), тож нова identity не могла з'явитися взагалі.
-        // Потребує скалярний id (JSON-RPC 2.0: рядок або число; без нього нікуди повернути токен) і дозволений
-        // рівно раз на сокет. Об'єкт/масив як id не повинен «з'їсти» одноразовий інвайт — такий кадр іде у 4401.
-        // Лише з AwaitingAuthenticate: кадр, що прийшов уже після close (Closed — напр. спрацював auth-таймер),
-        // не повинен витрачати інвайт, бо токен уже нікуди доставити.
+        // AwaitingAuthenticate: онбординг нового пристрою — redeemInvite без токена (у нього ще немає
+        // токена, тож до RPC-стеку він не дійде). Успіх → ack {identityId, token} і одразу pop.challenge
+        // на щойно виданий токен (той самий PoP-шлях, що й authenticate).
+        // Лише з AwaitingAuthenticate і зі скалярним id (JSON-RPC 2.0: рядок/число): кадр після close
+        // (Closed — напр. спрацював auth-таймер) або з id-об'єктом/масивом/null не витрачає одноразовий
+        // інвайт, а йде у 4401 нижче.
         if (string.Equals(method, "redeemInvite", StringComparison.Ordinal) &&
             state == SessionAuthState.AwaitingAuthenticate &&
-            ackId is { ValueKind: JsonValueKind.String or JsonValueKind.Number } &&
-            Interlocked.Exchange(ref _redeemAttempted, 1) == 0)
+            ackId is { ValueKind: JsonValueKind.String or JsonValueKind.Number })
         {
-            _ = HandleRedeemInviteAsync(inviteCode, devicePublicKey, ackId.Value);
+            HandlePreAuthRedeem(inviteCode, devicePublicKey, ackId);
             return;
         }
 
         CloseUnknownPreAuthMethod();
     }
 
-    // Виконує redeemInvite поза StreamJsonRpc-стеком (сесія ще не активна) і відповідає вручну зібраним
-    // кадром: плейнтекст-токен НЕ проходить через загальний серіалізатор і НІКОЛИ не логується. Сокет
-    // лишається AwaitingAuthenticate під тим самим auth-таймером — клієнт далі шле authenticate з
-    // новим токеном (на цьому ж або новому з'єднанні).
-    private async Task HandleRedeemInviteAsync(string? code, string? devicePublicKey, JsonElement id)
+    // Pre-auth redeemInvite (онбординг пристрою при Server:Auth:Enabled). Одна спроба на з'єднання:
+    // відмова (невалідний код -32006, rate-cap -32005, малформ ключа -32602) → error-кадр і close 4401
+    // invalid. REDACT: ні код, ні ключ, ні виданий токен не логуються.
+    private void HandlePreAuthRedeem(string? code, string? devicePublicKey, JsonElement? ackId)
     {
+        RedeemInviteResponse redeemed;
         try
         {
-            await using var scope = _serviceProvider.CreateAsyncScope();
-            var onboarding = scope.ServiceProvider.GetService<Interfaces.ISignalOnboardingRpc>();
-            if (onboarding is null)
-            {
-                SendPreAuthError(id, (int)StreamJsonRpc.Protocol.JsonRpcErrorCode.MethodNotFound, "Method not found", null);
-                return;
-            }
-
-            var result = await onboarding.RedeemInvite(code ?? string.Empty, devicePublicKey ?? string.Empty)
-                .ConfigureAwait(false);
-            SendRedeemAck(id, result.IdentityId, result.Token);
+            using var scope = _serviceProvider.CreateScope();
+            var onboarding = scope.ServiceProvider.GetRequiredService<SignalCliNet.WsRpcServer.Interfaces.ISignalOnboardingRpc>();
+            // Адаптер завершується синхронно (Task.FromResult; стор синхронний), а pre-auth обробник
+            // викликається з receive-циклу NetCoreServer, тож чекання тут не блокує пул.
+            redeemed = onboarding.RedeemInvite(code ?? string.Empty, devicePublicKey ?? string.Empty)
+                .GetAwaiter().GetResult();
         }
         catch (global::WsRpcServer.Exceptions.RpcErrorException ex)
         {
-            SendPreAuthError(id, (int)ex.ErrorCode, ex.Message, ex.ErrorData as RateLimitErrorData);
+            Logger.LogInformation("Сесія {ClientId}: pre-auth redeemInvite відхилено ({Code}).", Id, (int)ex.ErrorCode);
+            if (ackId is { } errorId)
+                SendPreAuthError(errorId, (int)ex.ErrorCode, ex.Message, ex.ErrorData as RateLimitErrorData);
+            CloseAuth(AuthCloseCodes.TokenRejected, AuthCloseReasons.Invalid);
+            return;
         }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
-        {
-            // Межа fire-and-forget: деталі — лише в лог (без коду/ключа), клієнту — generic -32603.
-            Logger.LogError(ex, "Сесія {ClientId}: redeemInvite впав.", Id);
-            SendPreAuthError(id, (int)StreamJsonRpc.Protocol.JsonRpcErrorCode.InternalError, "Internal error", null);
-        }
+
+        if (ackId is { } id)
+            SendRedeemAck(id, redeemed);
+
+        ResolveToken(_tokenService.Authenticate(redeemed.Token), fromFallback: true);
     }
 
-    // Result-ack redeemInvite: {"identityId":"…","token":"<plaintext>"} — вручну, як SendPopAck.
-    private void SendRedeemAck(JsonElement id, string identityId, string token)
+    // Result-ack pre-auth redeemInvite: {"identityId":"…","token":"<plaintext>"}. Будуємо вручну
+    // Utf8JsonWriter-ом — токен НЕ проходить через загальний серіалізатор і не логується.
+    private void SendRedeemAck(JsonElement id, RedeemInviteResponse redeemed)
     {
-        if (IsDisposed)
-            return;
-
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(buffer))
         {
@@ -935,8 +927,8 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
             id.WriteTo(writer);
             writer.WritePropertyName("result");
             writer.WriteStartObject();
-            writer.WriteString("identityId", identityId);
-            writer.WriteString("token", token);
+            writer.WriteString("identityId", redeemed.IdentityId);
+            writer.WriteString("token", redeemed.Token);
             writer.WriteEndObject();
             writer.WriteEndObject();
         }
@@ -944,12 +936,9 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
         SendTextAsync(buffer.WrittenSpan);
     }
 
-    // JSON-RPC error-кадр для pre-auth відповіді. data — лише retry_after (S9) для -32005, інакше без data.
+    // Error-кадр pre-auth виклику: {code, message[, data.retry_after]} — без деталей винятку (санітизовано).
     private void SendPreAuthError(JsonElement id, int code, string message, RateLimitErrorData? rateLimit)
     {
-        if (IsDisposed)
-            return;
-
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(buffer))
         {

@@ -56,7 +56,7 @@ dotnet run --project src/SignalCliNet.WsRpcServer
 | `Server:Tls:Hostname` | — | Internal-hostname у SAN авто-згенерованого server-cert (для internal-CA деплою без домену; опційно). |
 | `Server:Auth:Enabled` | `false` | Увімкнути token/PoP-автентифікацію (Фаза 2). Дефолт `false` **зберігає** Фазу-1 loopback-full-access незмінною. |
 | `Server:Auth:TokenTtlHours` | `12` | TTL access-токена, годин (1..168). |
-| `Server:Auth:AuthTimeoutSeconds` | `10` | Скільки сесія без токена (браузерна або onboarding-сокет `wsrpc-onboarding`) може лишатись неавтентифікованою (чекати `authenticate` або `redeemInvite` + `authenticate`) до close `4408` (3..120). |
+| `Server:Auth:AuthTimeoutSeconds` | `10` | Скільки сесія без токена (браузерна або onboarding-сокет `wsrpc-onboarding`) може лишатись неавтентифікованою (чекати `authenticate` або `redeemInvite`, і далі `pop.prove`) до close `4408` (3..120). |
 | `Server:Auth:MaxUnauthenticatedPerIp` | `8` | Cap одночасних неавтентифікованих сокетів на один IP (1..1024). |
 | `Server:Auth:RenewalPerIdentityPerHour` | `4` | Скільки разів identity може оновити прострочений токен через PoP (T5) за ковзну годину (1..60). Перевищення → renewal тимчасово недоступний (close `4401 expired`). |
 | `Server:Auth:AllowedOrigins` | `[]` | Exact-match allowlist браузерних `Origin` (defense-in-depth, **не** authn). Кожен елемент — абсолютний `scheme://host[:port]` без `/` в кінці (напр. `chrome-extension://<id>`). Порожній список **відхиляє будь-який** Origin (fail-closed); запити без `Origin` (не-браузери) не підпадають під перевірку. |
@@ -126,13 +126,20 @@ in-flight cap, server-wide гейт до signal-cli) — **опт-ін**, як �
 - **`-32005`** — перевищено rate-limit стартів лінкування (**3/хв на identity**); `error.data` несе
   `retry_after` (секунди), як і решта `-32005`.
 
-Коди відмов онбордингу через інвайт (`redeemInvite`, зміна `add-invites-admin`):
+Онбординг пристрою при `Server:Auth:Enabled=true` (клієнт без токена):
 
-Не-браузерний клієнт без токена відкриває сокет для `redeemInvite` із субпротоколом
-**`wsrpc-onboarding`** (інакше — `HTTP 401` до апгрейду); на такому сокеті дозволена **одна** спроба
-редемпшну (повторна → close `4401`), після чого той самий сокет може надіслати `authenticate` з новим
-токеном і пройти PoP. `id` запиту має бути рядком або числом. Auth-таймаут (`AuthTimeoutSeconds`) діє на
-цей сокет з моменту підключення: `redeemInvite` і `authenticate` мають встигнути до нього, інакше close `4408`.
+1. Конект без токена. Браузер — з `Origin` в allowlist і реальним субпротоколом (напр. `["potuzhnist.v1"]`);
+   не-браузерний клієнт — із субпротоколом **`wsrpc-onboarding`** (інакше `HTTP 401` до апгрейду).
+2. Перший кадр — `{"jsonrpc":"2.0","id":1,"method":"redeemInvite","params":{"code":"…","devicePublicKey":"<base64 SPKI P-256>"}}`.
+3. Відповідь `{"result":{"identityId":"…","token":"ptzh_…"}}`, одразу за нею — `pop.challenge` на виданий токен.
+4. `pop.prove` (ECDSA P-256 SHA-256, IEEE P1363, над UTF-8 `nonce + connId`) → сесія активна.
+5. Наступні конекти: субпротоколи `[token, "potuzhnist.v1"]` (або fallback `authenticate`) → `pop.challenge` → `pop.prove`.
+
+Одна спроба редемпшну на з'єднання: відмова → error-кадр і close `4401 invalid`. `id` запиту має бути
+рядком або числом (інакше `4401` без витрати інвайту). Auth-таймаут (`AuthTimeoutSeconds`) діє з моменту
+підключення: `redeemInvite` і `pop.prove` мають встигнути до нього, інакше close `4408`.
+
+Коди відмов онбордингу через інвайт (`redeemInvite`, зміна `add-invites-admin`):
 
 - **`-32006`** — невалідний інвайт-код (невідомий / прострочений / уже погашений / понад attempt-cap).
   Однакова помилка на всі випадки (anti-oracle). `error.message` = `"Invite is invalid or has expired."`.

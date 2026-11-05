@@ -5,31 +5,41 @@
 Формат базується на [Keep a Changelog](https://keepachangelog.com/uk/1.1.0/),
 а нумерація версій дотримується [семантичного версіонування](https://semver.org/lang/uk/).
 
+## [2.3.2] — 2026-11-05
+
+### Added
+
+- **Онбординг для не-браузерних клієнтів.** Клієнт без токена (не браузер) отримував `HTTP 401` ще до
+  upgrade, тож pre-auth `redeemInvite` з 2.3.1 був доступний лише браузеру. Тепер такий клієнт пропонує
+  зарезервований субпротокол **`wsrpc-onboarding`** і проходить на pre-auth сокет під auth-таймером;
+  далі той самий шлях, що й у браузера: `redeemInvite` → ack `{identityId, token}` → `pop.challenge` →
+  `pop.prove`. Без токена й без цього субпротоколу — як і раніше `401`. Потрібно, зокрема, для
+  Home Assistant-інтеграції `ha-signal-wsrpc`.
+- **Release: all-in-one Linux-бандли** `SignalCliNet.WsRpcServer-<ver>-linux-{x64,arm64}-bundle.tar.gz`
+  (self-contained сервер + Temurin JRE 25 + для arm64 `libsignal_jni` aarch64) і `SHA256SUMS`;
+  додано publish `linux-arm64` (`deploy/bundle-linux.sh`). Лише glibc — libsignal не має musl-збірок.
+
+### Fixed
+
+- Pre-auth `redeemInvite` приймається лише в стані `AwaitingAuthenticate` і лише зі скалярним `id`
+  (рядок/число): кадр після close або з `id`-об'єктом/масивом/`null` більше не витрачає одноразовий
+  інвайт (→ `4401`).
+
+### Docs
+
+- `docs/self-host.md`: receive-mode приведено у відповідність до коду (дефолт `on-start`,
+  `SignalCli:ContinuousReceive`; `GroupClaim:Enabled=false` receive не вимикає; manual-режим отримує
+  вхідні, поки є WS-підписка); `AuthTimeoutSeconds` діє і на onboarding-сокет.
+
 ## [2.3.1] — 2026-11-05
 
 ### Fixed
 
-- **Онбординг через інвайт (`redeemInvite`) знову досяжний при `Server:Auth:Enabled=true`.**
-  Раніше pre-auth сокет приймав лише `authenticate`/`pop.prove`, тож `redeemInvite` закривав
-  з'єднання `4401 invalid`, а не-браузерний клієнт без токена отримував `HTTP 401` ще до upgrade.
-  Через це жодна нова identity не могла отримати перший токен (Sybil-гейт був глухою стіною).
-  Тепер: не-браузерний клієнт без токена пропонує зарезервований субпротокол **`wsrpc-onboarding`**
-  (браузер, як і раніше, проходить через Origin-allowlist), і на такому pre-auth сокеті дозволено
-  **одну** спробу `redeemInvite` (повторна → `4401`). Відповідь (`identityId` + плейнтекст-токен)
-  будується вручну й ніколи не логується; помилки адаптера (`-32006`, `-32005` з `retry_after`,
-  `-32602`) передаються клієнту як є. Сокет лишається pre-auth під тим самим auth-таймером, тож
-  клієнт одразу шле `authenticate` новим токеном + PoP. Решта поведінки upgrade незмінна
-  (без токена й без субпротоколу → `401`). Нові DoD-тести в `AuthnHandshakeDodTests`.
-
-### Security
-
-- `MessagePack` `2.5.302` → `2.5.307` (останній патч 2.5.x): закриває GHSA-qhrr-8q5h-9q3h (NU1902,
-  moderate), через яку червонів CI-гейт `dotnet list package --vulnerable`.
-
-### Docs
-
-- `docs/self-host.md`: секцію receive-mode приведено у відповідність до 2.1.0 (дефолт `on-start`,
-  перемикач `SignalCli:ContinuousReceive`); описано онбординг-субпротокол.
+- **`redeemInvite` недосяжний при `Server:Auth:Enabled=true`.** Новий пристрій ще не має токена, а
+  pre-auth стан приймав лише `authenticate`, тож онбординг через інвайт закривав з'єднання `4401`.
+  Тепер браузерний клієнт без токена може першим кадром надіслати `redeemInvite`: отримує
+  `{identityId, token}` і одразу `pop.challenge` на виданий токен (той самий PoP-шлях). Одна спроба на
+  з'єднання, відмова → error-кадр і close `4401 invalid`. Код, ключ і токен не логуються.
 
 ## [2.3.0] — 2026-11-05
 
