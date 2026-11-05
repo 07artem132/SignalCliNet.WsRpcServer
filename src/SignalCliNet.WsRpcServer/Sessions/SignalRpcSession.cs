@@ -867,8 +867,10 @@ public sealed class SignalRpcSession : AbstractJsonRpcSession
         // AwaitingAuthenticate: онбординг через інвайт (add-invites-admin). Це ЄДИНИЙ token-less RPC
         // (політика IdentityOnboarding) — без цього гілки redeemInvite на Auth:Enabled=true був недосяжний
         // (pre-auth сокет приймав лише authenticate → 4401), тож нова identity не могла з'явитися взагалі.
-        // Потребує id (без нього нікуди повернути токен) і дозволений рівно раз на сокет.
-        if (string.Equals(method, "redeemInvite", StringComparison.Ordinal) && ackId is not null &&
+        // Потребує скалярний id (JSON-RPC 2.0: рядок або число; без нього нікуди повернути токен) і дозволений
+        // рівно раз на сокет. Об'єкт/масив як id не повинен «з'їсти» одноразовий інвайт — такий кадр іде у 4401.
+        if (string.Equals(method, "redeemInvite", StringComparison.Ordinal) &&
+            ackId is { ValueKind: JsonValueKind.String or JsonValueKind.Number } &&
             Interlocked.Exchange(ref _redeemAttempted, 1) == 0)
         {
             _ = HandleRedeemInviteAsync(inviteCode, devicePublicKey, ackId.Value);

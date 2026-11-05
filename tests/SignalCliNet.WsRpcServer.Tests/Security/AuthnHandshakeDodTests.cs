@@ -38,6 +38,7 @@ public sealed class AuthnHandshakeDodTests : IAsyncLifetime
     private const string RealProto = "jsonrpc.dod";
     private const string AllowedOrigin = "chrome-extension://dodtest";
     private const string GoodInvite = "GOOD";
+    private int _redeemCalls;
 
     private readonly string _dataDir =
         Path.Combine(Path.GetTempPath(), "wsrpc-authn-dod-" + Guid.NewGuid().ToString("N"));
@@ -103,6 +104,7 @@ public sealed class AuthnHandshakeDodTests : IAsyncLifetime
             .Setup(o => o.RedeemInvite(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .Returns((string code, string spki, CancellationToken _) =>
             {
+                Interlocked.Increment(ref _redeemCalls);
                 if (code != GoodInvite)
                 {
                     throw new global::WsRpcServer.Exceptions.RpcErrorException(
@@ -371,6 +373,9 @@ public sealed class AuthnHandshakeDodTests : IAsyncLifetime
         var token = result.GetProperty("token").GetString()!;
         Assert.StartsWith(TokenFormat.Prefix, token);
         Assert.False(string.IsNullOrEmpty(result.GetProperty("identityId").GetString()));
+        // Після redeem сокет ще pre-auth: бізнес-сервіси не зареєстровані до PoP.
+        _registryMock.Verify(
+            r => r.RegisterServices(It.IsAny<StreamJsonRpc.JsonRpc>(), It.IsAny<Guid>()), Times.Never);
 
         // Той самий сокет лишається pre-auth: authenticate новим токеном + PoP → Active.
         await SendJsonAsync(ws, AuthenticateFrame(2, token));
@@ -398,8 +403,26 @@ public sealed class AuthnHandshakeDodTests : IAsyncLifetime
         Assert.Equal("invalid", reason);
     }
 
+    [Theory]
+    [InlineData("{\"x\":1}")]
+    [InlineData("[1]")]
+    [InlineData("null")]
+    public async Task RedeemInvite_NonScalarId_Closes4401_WithoutConsumingInvite(string rawId)
+    {
+        using var ws = await ConnectAsync([SignalRpcSession.OnboardingSubprotocol]);
+        var spki = Convert.ToBase64String(ECDsa.Create(ECCurve.NamedCurves.nistP256).ExportSubjectPublicKeyInfo());
+
+        await SendJsonAsync(ws, RedeemFrame(rawId, GoodInvite, spki));
+        var (code, _) = await ReceiveCloseAsync(ws);
+        Assert.Equal(4401, code);
+        Assert.Equal(0, Volatile.Read(ref _redeemCalls));   // одноразовий інвайт не витрачено
+    }
+
     private static string RedeemFrame(int id, string code, string spki) =>
-        "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"method\":\"redeemInvite\",\"params\":{\"code\":\"" + code +
+        RedeemFrame(id.ToString(System.Globalization.CultureInfo.InvariantCulture), code, spki);
+
+    private static string RedeemFrame(string rawId, string code, string spki) =>
+        "{\"jsonrpc\":\"2.0\",\"id\":" + rawId + ",\"method\":\"redeemInvite\",\"params\":{\"code\":\"" + code +
         "\",\"devicePublicKey\":\"" + spki + "\"}}";
 
     private string SeedIdentity(string id)
