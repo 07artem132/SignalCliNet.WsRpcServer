@@ -1,6 +1,8 @@
 name: Release
 
-# Реліз-пайплайн: publish self-contained linux-x64 + win-x64 бінарників як GitHub Release assets.
+# Реліз-пайплайн: publish self-contained linux-x64 + linux-arm64 + win-x64 бінарників як GitHub
+# Release assets, плюс all-in-one бандли linux-{x64,arm64}-bundle (сервер + Temurin JRE 25 +
+# libsignal під arch, див. deploy/bundle-linux.sh) для managed mode HA-інтеграції, і SHA256SUMS.
 #
 # Restore-логіка (FAST/FALLBACK) — 1:1 з build.yml (CI), плюс окремий RID-специфічний
 # restore (linux-x64, win-x64) перед publish: `dotnet publish -r <rid> --self-contained`
@@ -84,10 +86,11 @@ jobs:
           fi
 
       # --- RID-специфічний restore: publish пізніше все одно ресторить сам, це — fail-fast + прогрів кешу ---
-      - name: Restore (linux-x64, win-x64)
+      - name: Restore (linux-x64, linux-arm64, win-x64)
         run: |
           set -euo pipefail
           dotnet restore SignalCliNet.WsRpcServer.sln -r linux-x64 $NUGET_EXTRA_ARGS
+          dotnet restore SignalCliNet.WsRpcServer.sln -r linux-arm64 $NUGET_EXTRA_ARGS
           dotnet restore SignalCliNet.WsRpcServer.sln -r win-x64 $NUGET_EXTRA_ARGS
 
       # --- Build + test (реліз не публікує неперевірений код) ---
@@ -128,6 +131,12 @@ jobs:
           -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=false
           -o out/linux-x64 $NUGET_EXTRA_ARGS
 
+      - name: Publish linux-arm64
+        run: >
+          dotnet publish src/SignalCliNet.WsRpcServer/SignalCliNet.WsRpcServer.csproj
+          -c Release -r linux-arm64 --self-contained true -p:PublishSingleFile=false
+          -o out/linux-arm64 $NUGET_EXTRA_ARGS
+
       - name: Publish win-x64
         run: >
           dotnet publish src/SignalCliNet.WsRpcServer/SignalCliNet.WsRpcServer.csproj
@@ -138,11 +147,24 @@ jobs:
         run: |
           set -euo pipefail
           tar -C out/linux-x64 -czf "SignalCliNet.WsRpcServer-${VERSION}-linux-x64.tar.gz" .
+          tar -C out/linux-arm64 -czf "SignalCliNet.WsRpcServer-${VERSION}-linux-arm64.tar.gz" .
           if ! command -v zip >/dev/null; then
             sudo apt-get update
             sudo apt-get install -y zip
           fi
           (cd out/win-x64 && zip -r "../../SignalCliNet.WsRpcServer-${VERSION}-win-x64.zip" .)
+
+      # --- All-in-one бандли для managed mode HA-інтеграції (сервер + JRE 25 + libsignal під arch) ---
+      - name: Build Linux bundles
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          bash deploy/bundle-linux.sh x64 out/linux-x64 "SignalCliNet.WsRpcServer-${VERSION}-linux-x64-bundle.tar.gz"
+          bash deploy/bundle-linux.sh arm64 out/linux-arm64 "SignalCliNet.WsRpcServer-${VERSION}-linux-arm64-bundle.tar.gz"
+
+      - name: Checksums
+        run: sha256sum SignalCliNet.WsRpcServer-*.tar.gz SignalCliNet.WsRpcServer-*.zip | tee SHA256SUMS
 
       # --- Тег → справжній GitHub Release; ручний запуск → лише workflow-артефакти (без релізу) ---
       - name: Create GitHub Release
@@ -154,7 +176,11 @@ jobs:
           --title "SignalCliNet.WsRpcServer $VERSION"
           --generate-notes
           "SignalCliNet.WsRpcServer-${VERSION}-linux-x64.tar.gz"
+          "SignalCliNet.WsRpcServer-${VERSION}-linux-arm64.tar.gz"
+          "SignalCliNet.WsRpcServer-${VERSION}-linux-x64-bundle.tar.gz"
+          "SignalCliNet.WsRpcServer-${VERSION}-linux-arm64-bundle.tar.gz"
           "SignalCliNet.WsRpcServer-${VERSION}-win-x64.zip"
+          SHA256SUMS
 
       - name: Upload workflow artifacts (manual run)
         if: github.event_name == 'workflow_dispatch'
@@ -162,5 +188,6 @@ jobs:
         with:
           name: SignalCliNet.WsRpcServer-${{ env.VERSION }}
           path: |
-            SignalCliNet.WsRpcServer-*-linux-x64.tar.gz
+            SignalCliNet.WsRpcServer-*.tar.gz
             SignalCliNet.WsRpcServer-*-win-x64.zip
+            SHA256SUMS
