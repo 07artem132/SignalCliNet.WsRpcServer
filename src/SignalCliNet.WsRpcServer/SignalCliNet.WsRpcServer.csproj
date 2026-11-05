@@ -33,9 +33,10 @@
       <PackageReference Include="SignalCli.NET" Version="4.10.3" />
       <PackageReference Include="SignalCli.Runtime" Version="0.14.6.1" />
       <PackageReference Include="StreamJsonRpc" Version="2.25.29" />
-      <!-- Закриваємо транзитивну вразливість StreamJsonRpc → MessagePack 2.5.192
-           (GHSA-hv8m-jj95-wg3x / NU1903). 2.5.307 — остання патчена 2.5.x: 2.5.302
-           (яку тягне StreamJsonRpc 2.25.29) зачеплена GHSA-qhrr-8q5h-9q3h (NU1902). -->
+      <!-- Закриваємо транзитивні вразливості StreamJsonRpc → MessagePack: 2.5.192
+           (GHSA-hv8m-jj95-wg3x / NU1903) і 2.5.302 (GHSA-qhrr-8q5h-9q3h / NU1902).
+           2.5.307 — найновіша 2.5.x без відомих advisory; StreamJsonRpc 2.25.29
+           транзитивно тягне 2.5.302, тому версію пінимо явно. -->
       <PackageReference Include="MessagePack" Version="2.5.307" />
     </ItemGroup>
 
