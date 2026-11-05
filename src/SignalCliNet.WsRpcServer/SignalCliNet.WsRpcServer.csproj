@@ -5,38 +5,38 @@
         <TargetFramework>net10.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
-        <AssemblyVersion>2.3.2</AssemblyVersion>
-        <FileVersion>2.3.2</FileVersion>
+        <AssemblyVersion>2.3.3</AssemblyVersion>
+        <FileVersion>2.3.3</FileVersion>
     </PropertyGroup>
 
     <ItemGroup>
-      <PackageReference Include="JSON-RPC.NET" Version="2.8.0" />
+      <PackageReference Include="JSON-RPC.NET" Version="2.8.1" />
       <!-- Durable-стор (G4/R3.7): embedded SQLite. Microsoft-мейнтейнений провайдер, без відомих CVE;
            10.0.x у лінії net10. Тягне SQLitePCLRaw.bundle_e_sqlite3 (нативний SQLite) — з nuget.org. -->
-      <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.10" />
-      <!-- Explicit override транзитивного SQLitePCLRaw: 2.1.11 (дефолт Microsoft.Data.Sqlite 10.0.x)
-           має GHSA-2m69-gcr7-jv3q (вразливий бандл нативного SQLite) — CI audit-гейт його блокує.
-           Прибрати, коли Microsoft.Data.Sqlite сам перейде на ≥2.1.12. -->
-      <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
-      <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.9" />
-      <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.9" />
-      <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.9" />
-      <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.9" />
+      <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.14" />
+      <!-- Explicit floor транзитивного SQLitePCLRaw: ≤2.1.11 має GHSA-2m69-gcr7-jv3q (вразливий бандл
+           нативного SQLite). Microsoft.Data.Sqlite 10.0.14 сам тягне 2.1.13; пін лишаємо як нижню межу,
+           щоб downgrade Sqlite не повернув вразливий бандл. Лінія 2.1.x (3.x — мажор). -->
+      <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.14" />
+      <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.14" />
+      <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.14" />
+      <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.14" />
+      <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.14" />
       <!-- Прямий референс потрібен, щоб запустився source-generator [OptionsValidator]
            (аналайзери не течуть транзитивно) — валідатори Deployment/-опцій (A3). -->
-      <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.9" />
-      <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.9" />
+      <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.14" />
+      <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.14" />
       <PackageReference Include="NetCoreServer" Version="8.0.7" />
       <!-- CRC32 для checksum-сегмента opaque-токена (fast-reject малформлених токенів БЕЗ
            звернення до стору й HMAC). Microsoft-мейнтейнений, 10.0.x у лінії net10; з nuget.org. -->
-      <PackageReference Include="System.IO.Hashing" Version="10.0.10" />
-      <PackageReference Include="SignalCli.NET" Version="4.10.3" />
+      <PackageReference Include="System.IO.Hashing" Version="10.0.14" />
+      <PackageReference Include="SignalCli.NET" Version="4.10.4" />
       <PackageReference Include="SignalCli.Runtime" Version="0.14.6.1" />
-      <PackageReference Include="StreamJsonRpc" Version="2.25.29" />
+      <PackageReference Include="StreamJsonRpc" Version="2.26.150" />
       <!-- Закриваємо транзитивні вразливості StreamJsonRpc → MessagePack: 2.5.192
            (GHSA-hv8m-jj95-wg3x / NU1903) і 2.5.302 (GHSA-qhrr-8q5h-9q3h / NU1902).
-           2.5.307 — найновіша 2.5.x без відомих advisory; StreamJsonRpc 2.25.29
-           транзитивно тягне 2.5.302, тому версію пінимо явно. -->
+           2.5.307 — найновіша 2.5.x без відомих advisory; StreamJsonRpc 2.26.150 уже сам
+           тягне 2.5.307, пін лишаємо як нижню межу проти регресу при майбутньому bump. -->
       <PackageReference Include="MessagePack" Version="2.5.307" />
     </ItemGroup>
 

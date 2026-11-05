@@ -77,11 +77,14 @@ SCRIPT
 # ----------------------------------------------------------------------------
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 
-# signal-cli 0.14.3 requires JDK 25. Temurin 25 is fetched from GitHub releases.
-ARG TEMURIN_URL=https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25%2B36/OpenJDK25U-jdk_x64_linux_hotspot_25_36.tar.gz
+# signal-cli 0.14.6 requires JDK 25. Temurin 25 is fetched from GitHub releases.
+ARG TEMURIN_URL=https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.5%2B8/OpenJDK25U-jdk_x64_linux_hotspot_25.0.5_8.tar.gz
+# SHA-256 з Adoptium API (assets/release_name/eclipse/jdk-25.0.5+8, linux/x64/jdk). Bump URL → bump hash.
+ARG TEMURIN_SHA256=68982529869257d0ee6b824ec5aa270ff8b118bb438670da0b97ebdab178d7fb
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
     && mkdir -p /opt/jdk25 \
-    && curl -sSL "$TEMURIN_URL" -o /tmp/jdk25.tar.gz \
+    && curl -fsSL "$TEMURIN_URL" -o /tmp/jdk25.tar.gz \
+    && echo "$TEMURIN_SHA256  /tmp/jdk25.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/jdk25.tar.gz -C /opt/jdk25 --strip-components=1 \
     && rm /tmp/jdk25.tar.gz \
     && apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*

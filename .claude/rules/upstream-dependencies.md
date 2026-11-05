@@ -13,9 +13,9 @@ the single most important fact for editing it safely.
 
 | Concern | Lives in | Surface here |
 |---|---|---|
-| signal-cli process launch/supervise/health, typed Signal API, incoming events | **SignalCli.NET** (4.10.2) | `AddSignalCli(...)` + `AddSignalEvents()` in `Program.cs`; consumed by the `Signal*RpcAdapter`s |
-| WebSocket transport, JSON-RPC 2.0 correlation, abstract base classes, service discovery | **JSON-RPC.NET / WsRpcServer** (2.8.0) | `AddJsonRpcCore(...)` via `AddSignalJsonRpc`; the `Abstract*` subclasses (`SignalRpcServer`, `SignalRpcSession`, `RpcServiceRegistry`, `EventProcessor`, `SubscriptionManager`) |
-| signal-cli + JDK 25 payload | **SignalCli.Runtime** (0.14.3.1) | staged into output by its `.targets`; published via the `CopySignalCliToPublish` MSBuild target |
+| signal-cli process launch/supervise/health, typed Signal API, incoming events | **SignalCli.NET** (4.10.4) | `AddSignalCli(...)` + `AddSignalEvents()` in `Program.cs`; consumed by the `Signal*RpcAdapter`s |
+| WebSocket transport, JSON-RPC 2.0 correlation, abstract base classes, service discovery | **JSON-RPC.NET / WsRpcServer** (2.8.1) | `AddJsonRpcCore(...)` via `AddSignalJsonRpc`; the `Abstract*` subclasses (`SignalRpcServer`, `SignalRpcSession`, `RpcServiceRegistry`, `EventProcessor`, `SubscriptionManager`) |
+| signal-cli + JDK 25 payload | **SignalCli.Runtime** (0.14.6.1) | staged into output by its `.targets`; published via the `CopySignalCliToPublish` MSBuild target |
 
 ## Rules
 
@@ -24,7 +24,7 @@ the single most important fact for editing it safely.
    call site — you don't reimplement upstream behavior. If upstream needs a change, make it there (those
    repos have their own `CLAUDE.md` + OpenSpec process).
 2. **Version bumps move as a set.** SignalCli.NET ↔ SignalCli.Runtime are coupled (the runtime ships the
-   signal-cli + JRE the library drives); JDK requirement tracks signal-cli (0.14.3 ⇒ JDK 25). When you
+   signal-cli + JRE the library drives); JDK requirement tracks signal-cli (0.14.6 ⇒ JDK 25). When you
    touch any of these, update **all** of: `SignalCliNet.WsRpcServer.csproj`, `NuGet.Config` (package
    patterns), `deploy/Dockerfile*`, `deploy/DEPLOYMENT.md`, and the README — in one commit.
 3. **Private feed reality.** `SignalCli.NET`, `JSON-RPC.NET`, `SignalCli.Runtime` resolve **only** from
