@@ -22,13 +22,6 @@ Recipient `alias:<alias>` у `sendTextMessage` SHALL резолвитись ли
 - **WHEN** identity X і Y однієї команди шлють на той самий alias з однаковим messageId
 - **THEN** у групу йде одне повідомлення, обидва отримують той самий результат
 
-### Requirement: Особиста група рівно на двох
-Для alias `login:<id>` send SHALL відбуватись лише коли в групі рівно двоє учасників.
-
-#### Scenario: в особисту групу додали третього
-- **WHEN** у групі `login:<id>` троє учасників
-- **THEN** відмова `-32007` без revoke binding-у
-
 ### Requirement: Multi-use інвайт у команду
 Інвайт з `maxRedemptions = N` SHALL погашатись не більше N разів (атомарний інкремент), і кожне
 погашення SHALL створювати окреме identity в команді інвайту.

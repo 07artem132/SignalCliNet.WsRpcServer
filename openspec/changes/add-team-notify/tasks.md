@@ -2,6 +2,7 @@
 
 ## 0. Рішення
 - [x] 0.1 `sendTextMessage` лишається для всіх; шлюз текст не фільтрує, межа = bindings (власник, 2026-11-05)
+- [x] 0.1a Перевірки «рівно двоє» в особистій групі немає (власник, 2026-11-05)
 - [ ] 0.2 Coalescing на шлюзі чи на клієнті
 - [ ] 0.3 Хто видає інвайти в команду: лише admin чи і team-admin
 
@@ -18,8 +19,7 @@
 ## 3. Send за alias
 - [ ] 3.1 `RecipientValidator`: формат `alias:<all|admin|dir:<id>|login:<id>>`
 - [ ] 3.2 Резолв alias → група команди в `GroupSendGate`; anti-oracle `-32007`
-- [ ] 3.3 `login:<id>`: «рівно двоє» через `GroupMemberCache`
-- [ ] 3.4 RPC-політика нових admin-методів у `SignalRpcPolicyRegistry`
+- [ ] 3.3 RPC-політика нових admin-методів у `SignalRpcPolicyRegistry`
 
 ## 4. Privacy
 - [ ] 4.1 Логи без alias-id, messageId і тексту; лише статус і код помилки
