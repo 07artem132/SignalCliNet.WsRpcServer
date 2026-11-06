@@ -7,7 +7,7 @@ paths:
 # Cloud development (Claude Code on the web)
 
 A `SessionStart` hook (`.claude/hooks/session-start.sh`, wired via `.claude/settings.json`) installs
-`dotnet-sdk-10.0` (the app targets net10.0) and does a **best-effort** `dotnet restore`. It runs only when
+the SDK pinned in `global.json` via `dotnet-install.sh` (distro apt `dotnet-sdk-10.0` is 10.0.1xx and doesn't satisfy it) and does a **best-effort** `dotnet restore`. It runs only when
 `CLAUDE_CODE_REMOTE=true` and is idempotent.
 
 The restore is best-effort because the three upstream packages (`SignalCli.NET`, `JSON-RPC.NET`,

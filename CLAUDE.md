@@ -22,7 +22,7 @@ devices, and subscribe to incoming events without implementing HTTP/SSE plumbing
 
 - Target framework: **net10.0**, `OutputType=Exe`. Assembly version — `AssemblyVersion`/`FileVersion` in the csproj (bumped by `scripts/auto-release.sh`).
 - Requires **JDK 25** at runtime (signal-cli 0.14.6); the Docker image pulls Temurin 25 automatically.
-- Pinned upstream versions: **SignalCli.NET 4.11.0**, **JSON-RPC.NET 2.9.0**, **SignalCli.Runtime 0.14.6.1**.
+- Pinned upstream versions: **SignalCli.NET 4.11.0**, **JSON-RPC.NET 2.10.0**, **SignalCli.Runtime 0.14.6.1**.
 - **Releases are automatic:** every push to `main` runs `.github/workflows/auto-release.yml` → `scripts/auto-release.sh`
   (PRC model). A version raised in the PR (with its CHANGELOG section) is tagged as-is; otherwise a shipped-surface change
   gets a conventional-commit bump committed as `release: X.Y.Z` (the filled `[Unreleased]` becomes the release section).
@@ -52,7 +52,7 @@ needs a token with `read:packages`. In a fresh remote container that feed is unr
    See `deploy/DEPLOYMENT.md`.
 2. With a `GITHUB_TOKEN`, add the authenticated feed and restore normally.
 
-The `dotnet` SDK itself is `apt`-installable from `packages.microsoft.com`.
+The SDK is pinned in `global.json` (10.0.403, needed by the JSON-RPC.NET 2.10 source generator's Roslyn 5.9); install it with `dotnet-install.sh --jsonfile global.json` (the distro apt `dotnet-sdk-10.0` is 10.0.1xx).
 
 ## Architecture (key types — under `src/SignalCliNet.WsRpcServer/`)
 

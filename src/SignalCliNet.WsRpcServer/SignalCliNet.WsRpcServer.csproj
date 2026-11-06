@@ -5,12 +5,12 @@
         <TargetFramework>net10.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
-        <AssemblyVersion>2.4.0</AssemblyVersion>
-        <FileVersion>2.4.0</FileVersion>
+        <AssemblyVersion>2.4.1</AssemblyVersion>
+        <FileVersion>2.4.1</FileVersion>
     </PropertyGroup>
 
     <ItemGroup>
-      <PackageReference Include="JSON-RPC.NET" Version="2.9.0" />
+      <PackageReference Include="JSON-RPC.NET" Version="2.10.0" />
       <!-- Durable-стор (G4/R3.7): embedded SQLite. Microsoft-мейнтейнений провайдер, без відомих CVE;
            10.0.x у лінії net10. Тягне SQLitePCLRaw.bundle_e_sqlite3 (нативний SQLite) — з nuget.org. -->
       <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.14" />

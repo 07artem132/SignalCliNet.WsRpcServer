@@ -7,6 +7,16 @@
 
 ## [Unreleased]
 
+## [2.4.1] — 2026-11-06
+
+### Changed
+
+- **SDK і Roslyn на latest.** `global.json` пінить **SDK 10.0.403** (`rollForward: latestFeature`), `JSON-RPC.NET`
+  2.9.0 → **2.10.0** (source generator на `Microsoft.CodeAnalysis.CSharp` 5.9.0). Для збірки з вихідників потрібен
+  SDK **10.0.4xx+**: старіший компілятор пропускає генератор з `CS9057`. Docker-образ `sdk:10.0` і CI
+  (`setup-dotnet 10.0.x`) уже на 10.0.4xx; SessionStart-хук ставить SDK через `dotnet-install.sh --jsonfile global.json`.
+  Поведінка й wire-протокол без змін.
+
 ## [2.4.0] — 2026-11-06
 
 ### Added

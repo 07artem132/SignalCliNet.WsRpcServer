@@ -42,7 +42,8 @@ VERSION_FILES=("src/SignalCliNet.WsRpcServer/SignalCliNet.WsRpcServer.csproj|Ass
 CHANGELOG="CHANGELOG.md"
 # Не shipped-поверхня: зміни лише тут релізу не потребують.
 # example/ і deploy/ — shipped: AdminCli (wsrpc-admin) і quickstart/bundle ідуть у реліз.
-EXEMPT=(':!docs' ':!*.md' ':!.claude' ':!.github' ':!openspec' ':!scripts' ':!tests' ':!PLAN-*')
+# global.json — пін SDK для збірки, не shipped-поверхня (пакет/бінарі від нього не змінюються).
+EXEMPT=(':!global.json' ':!docs' ':!*.md' ':!.claude' ':!.github' ':!openspec' ':!scripts' ':!tests' ':!PLAN-*')
 # ------------------------------------------------------------------------------------------------
 
 emit() {  # emit <key> <value> — step output для workflow; поза Actions — no-op.
