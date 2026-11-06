@@ -71,7 +71,7 @@ compute_bump() {  # compute_bump <cur> <range>
   local cur="$1" range="$2" level=patch subjects bodies
   subjects="$(git log --no-merges --format='%s' "$range" -- . "${EXEMPT[@]}")"
   bodies="$(git log --no-merges --format='%b' "$range" -- . "${EXEMPT[@]}")"
-  if grep -qE '^[a-z]+(\([^)]*\))?!:' <<<"$subjects" || grep -q 'BREAKING CHANGE' <<<"$bodies"; then
+  if grep -qE '^[a-z]+(\([^)]*\))?!:' <<<"$subjects" || grep -qE '^BREAKING[ -]CHANGE:' <<<"$bodies"; then
     level=major
   elif grep -qE '^feat(\([^)]*\))?:' <<<"$subjects"; then
     level=minor
@@ -111,7 +111,7 @@ PY
 
 git fetch -q --tags --unshallow origin 2>/dev/null || git fetch -q --tags origin 2>/dev/null || true
 
-LAST_TAG="$(git tag -l 'v[0-9]*' --sort=v:refname | tail -1 | tr -d '\r')"
+LAST_TAG="$(git tag -l 'v[0-9]*' --sort=v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | tail -1 | tr -d '\r' || true)"
 if [ -z "$LAST_TAG" ]; then
   echo "auto-release FAIL: не видно жодного тегу v* — базовий тег ставиться руками, не цим скриптом." >&2
   exit 1
