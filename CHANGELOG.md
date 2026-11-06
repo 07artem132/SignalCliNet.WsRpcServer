@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [2.5.0] — 2026-11-06
+
 ### Added
 
 - **Автоподовження прив'язок груп** (`add-binding-auto-renew`). Прив'язка групи (per-identity і командний alias)
