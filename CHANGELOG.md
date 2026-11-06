@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [2.3.4] — 2026-11-06
+
 ### Added
 
 - **Шлюз сповіщень однією командою** (`deploy/quickstart/`). `install.sh --domain … --extension-id … --team …`
@@ -17,6 +19,14 @@
   до старту шлюзу напряму через signal-cli, тож він без власника в сторі — спільний бот, через який шлють
   команди. Налаштування — `gateway.json` (auth, admission, group-claim, `AllowedOrigins` з
   `chrome-extension://<id>`). CI-воркфлоу `quickstart.yml` збирає образ і проганяє admin-сценарій.
+
+### Fixed
+
+- **Відправка у власну Signal-групу більше не падає з `-32602 Malformed recipient`.** Валідатор
+  recipient'ів пропускав base64 group-id лише в gated shared-bot режимі (group-claim), а у звичайному
+  `sendTextMessage` проганяв його як user-id і відхиляв. Тепер валідний group-id у recipients проходить і
+  поза shared-bot режимом: акаунт уже звірено з principal (anti-IDOR не послаблено), членство в групі
+  перевіряє signal-cli. Знайдено на інтеграції Home Assistant (сповіщення в групу «дому»).
 
 ## [2.3.3] — 2026-11-05
 

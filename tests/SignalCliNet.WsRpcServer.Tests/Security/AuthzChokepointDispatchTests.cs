@@ -227,6 +227,81 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
         Assert.False(target.Invoked, "Малформований recipient не сміє дійти до signal-cli (S6).");
     }
 
+    // Реальний формат group-id signal-cli (base64 від 32 байт).
+    private const string OwnGroupId = "DXYNwFqSZ9qTG4sizURl7cvBLyYKVRtpfU69z4wlhIc=";
+
+    [Fact]
+    public async Task Task45_GroupId_OwnAccount_Loopback_ReachesTarget()
+    {
+        // Регрес: відправка у власну групу (HA → «Розумний дім») падала -32602 «Malformed recipient»,
+        // бо group-id проганявся як user-id поза shared-bot режимом.
+        var target = new MessageTarget();
+        var client = CreatePair(SignalPrincipal.LoopbackFullAccess, target);
+
+        var result = await client.InvokeWithParameterObjectAsync<string>("sendTextMessage", new
+        {
+            account = AccountA,
+            recipients = new[] { OwnGroupId },
+            message = "hi",
+        });
+
+        Assert.Equal("sent", result);
+        Assert.True(target.Invoked);
+    }
+
+    [Fact]
+    public async Task Task45_GroupId_UserOwnAccount_ReachesTarget()
+    {
+        var target = new MessageTarget();
+        var client = CreatePair(UserPrincipal(AccountA), target);
+
+        var result = await client.InvokeWithParameterObjectAsync<string>("sendTextMessage", new
+        {
+            account = AccountA,
+            recipients = new[] { OwnGroupId, AccountB },
+            message = "hi",
+        });
+
+        Assert.Equal("sent", result);
+        Assert.True(target.Invoked);
+    }
+
+    [Fact]
+    public async Task Task45_GroupId_ForeignAccount_StillDenied()
+    {
+        // Group-id не послаблює anti-IDOR: чужий акаунт відсікається до dispatch.
+        var target = new MessageTarget();
+        var client = CreatePair(UserPrincipal(AccountA), target);
+
+        var ex = await Assert.ThrowsAsync<RemoteInvocationException>(
+            () => client.InvokeWithParameterObjectAsync<string>("sendTextMessage", new
+            {
+                account = AccountB,
+                recipients = new[] { OwnGroupId },
+                message = "hi",
+            }));
+
+        Assert.Equal(AccountIsolationGuard.UnauthorizedErrorCode, ex.ErrorCode);
+        Assert.False(target.Invoked);
+    }
+
+    [Fact]
+    public async Task Task45_GroupIdPlusMalformed_StillRejected()
+    {
+        var target = new MessageTarget();
+        var client = CreatePair(SignalPrincipal.LoopbackFullAccess, target);
+
+        await Assert.ThrowsAnyAsync<RemoteRpcException>(
+            () => client.InvokeWithParameterObjectAsync<string>("sendTextMessage", new
+            {
+                account = AccountA,
+                recipients = new[] { OwnGroupId, "not-a-number" },
+                message = "hi",
+            }));
+
+        Assert.False(target.Invoked);
+    }
+
     [Fact]
     public void Task45_BrokenGroupId_IsRejectedByValidator()
     {
