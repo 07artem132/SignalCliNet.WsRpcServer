@@ -245,7 +245,7 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
             account = AccountA,
             recipients = new[] { OwnGroupId },
             message = "hi",
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.Equal("sent", result);
         Assert.True(target.Invoked);
@@ -262,7 +262,7 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
             account = AccountA,
             recipients = new[] { OwnGroupId, AccountB },
             message = "hi",
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.Equal("sent", result);
         Assert.True(target.Invoked);
@@ -281,7 +281,7 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
                 account = AccountB,
                 recipients = new[] { OwnGroupId },
                 message = "hi",
-            }));
+            }, TestContext.Current.CancellationToken));
 
         Assert.Equal(AccountIsolationGuard.UnauthorizedErrorCode, ex.ErrorCode);
         Assert.False(target.Invoked);
@@ -299,7 +299,7 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
                 account = AccountA,
                 recipients = new[] { OwnGroupId, "not-a-number" },
                 message = "hi",
-            }));
+            }, TestContext.Current.CancellationToken));
 
         Assert.False(target.Invoked);
     }
