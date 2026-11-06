@@ -58,7 +58,7 @@ public sealed class SignalAdminRpcAdapterTests : IDisposable
     {
         using var _ = SignalCallContext.Enter(Admin());
 
-        var response = await _adapter.CreateInvite(ttlSeconds: 3600, maxAttempts: 5);
+        var response = await _adapter.CreateInvite(ttlSeconds: 3600, maxAttempts: 5, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(string.IsNullOrWhiteSpace(response.Code));
         Assert.Equal(FixedTime.AddSeconds(3600), response.ExpiresAt);
@@ -82,7 +82,7 @@ public sealed class SignalAdminRpcAdapterTests : IDisposable
             _invites, Teams(), _tokens, _audit, _store, Options.Create(options), _time, NullLogger<SignalAdminRpcAdapter>.Instance);
         using var _ = SignalCallContext.Enter(Admin());
 
-        var response = await adapter.CreateInvite();
+        var response = await adapter.CreateInvite(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(FixedTime.AddSeconds(120), response.ExpiresAt);
         Assert.Equal(2, _store.GetInvite(InviteService.ComputeCodeHash(response.Code))!.MaxAttempts);
@@ -97,7 +97,7 @@ public sealed class SignalAdminRpcAdapterTests : IDisposable
         Assert.Equal(TokenAuthenticationStatus.Valid, _tokens.Authenticate(token).Status);
 
         using var _ = SignalCallContext.Enter(Admin());
-        var response = await _adapter.RevokeIdentity("victim");
+        var response = await _adapter.RevokeIdentity("victim", TestContext.Current.CancellationToken);
 
         Assert.True(response.Revoked);
         Assert.Equal("victim", response.IdentityId);
@@ -112,7 +112,7 @@ public sealed class SignalAdminRpcAdapterTests : IDisposable
     public async Task CreateInvite_WithoutAdminPrincipal_ThrowsUnauthorized()
     {
         // Немає call-context principal'а → -32001 (belt-and-suspenders; chokepoint зазвичай ловить раніше).
-        var ex = await Assert.ThrowsAsync<RpcErrorException>(() => _adapter.CreateInvite());
+        var ex = await Assert.ThrowsAsync<RpcErrorException>(() => _adapter.CreateInvite(cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal((JsonRpcErrorCode)AccountIsolationGuard.UnauthorizedErrorCode, ex.ErrorCode);
     }
 
@@ -120,7 +120,7 @@ public sealed class SignalAdminRpcAdapterTests : IDisposable
     public async Task RevokeIdentity_EmptyId_ThrowsInvalidParams()
     {
         using var _ = SignalCallContext.Enter(Admin());
-        var ex = await Assert.ThrowsAsync<RpcErrorException>(() => _adapter.RevokeIdentity("  "));
+        var ex = await Assert.ThrowsAsync<RpcErrorException>(() => _adapter.RevokeIdentity("  ", TestContext.Current.CancellationToken));
         Assert.Equal(JsonRpcErrorCode.InvalidParams, ex.ErrorCode);
     }
 
@@ -134,7 +134,7 @@ public sealed class SignalAdminRpcAdapterTests : IDisposable
         _store.InsertGroupBinding(binding);
 
         using var _ = SignalCallContext.Enter(Admin());
-        var response = await _adapter.RevokeBinding("u", "bind-1");
+        var response = await _adapter.RevokeBinding("u", "bind-1", TestContext.Current.CancellationToken);
 
         Assert.True(response.Revoked);
         Assert.Equal("bind-1", response.BindingId);
@@ -156,10 +156,10 @@ public sealed class SignalAdminRpcAdapterTests : IDisposable
 
         using var _ = SignalCallContext.Enter(Admin());
         // Невідомий bindingId → InvalidParams.
-        var unknown = await Assert.ThrowsAsync<RpcErrorException>(() => _adapter.RevokeBinding("u", "nope"));
+        var unknown = await Assert.ThrowsAsync<RpcErrorException>(() => _adapter.RevokeBinding("u", "nope", TestContext.Current.CancellationToken));
         Assert.Equal(JsonRpcErrorCode.InvalidParams, unknown.ErrorCode);
         // Чужий binding під іменем іншої identity → ІДЕНТИЧНА помилка (анти-oracle), binding НЕ чіпається.
-        var foreign = await Assert.ThrowsAsync<RpcErrorException>(() => _adapter.RevokeBinding("u", "bind-other"));
+        var foreign = await Assert.ThrowsAsync<RpcErrorException>(() => _adapter.RevokeBinding("u", "bind-other", TestContext.Current.CancellationToken));
         Assert.Equal(JsonRpcErrorCode.InvalidParams, foreign.ErrorCode);
         Assert.False(_store.GetGroupBinding("other", "grp-x")!.Revoked);
     }

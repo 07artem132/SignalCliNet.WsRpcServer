@@ -5,6 +5,8 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <IsPackable>false</IsPackable>
+        <!-- xunit v3: тестовий проєкт — самостійний виконуваний файл. -->
+        <OutputType>Exe</OutputType>
         <IsTestProject>true</IsTestProject>
     </PropertyGroup>
 
@@ -13,8 +15,9 @@
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.14" />
         <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
         <PackageReference Include="Moq" Version="4.21.0" />
-        <PackageReference Include="xunit" Version="2.9.3" />
-        <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
+        <!-- xunit.v3.mtp-off: xunit v3 на VSTest-хості, тож команди dotnet test у CI без змін. -->
+        <PackageReference Include="xunit.v3.mtp-off" Version="4.0.2" />
+        <PackageReference Include="xunit.runner.visualstudio" Version="4.0.1" />
     </ItemGroup>
 
     <ItemGroup>

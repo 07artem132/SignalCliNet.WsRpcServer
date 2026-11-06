@@ -41,11 +41,11 @@ public sealed class ChatCoalescerTests
         _time.Advance(TimeSpan.FromMinutes(1));
         Assert.Equal(CoalesceDecision.Queued, c.TryCoalesce(Bot, "g1", "three"));
 
-        await c.FlushDueAsync();
+        await c.FlushDueAsync(TestContext.Current.CancellationToken);
         Assert.Empty(_sent);   // вікно ще не скінчилось
 
         _time.Advance(TimeSpan.FromMinutes(3));
-        await c.FlushDueAsync();
+        await c.FlushDueAsync(TestContext.Current.CancellationToken);
 
         var batch = Assert.Single(_sent);
         Assert.Equal((Bot, "g1", "two" + ChatCoalescer.Separator + "three"), batch);
@@ -62,7 +62,7 @@ public sealed class ChatCoalescerTests
         Assert.Equal(CoalesceDecision.Queued, c.TryCoalesce(Bot, "g2", "b2"));
 
         _time.Advance(TimeSpan.FromMinutes(5));
-        await c.FlushDueAsync();
+        await c.FlushDueAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(2, _sent.Count);
         Assert.Contains((Bot, "g1", "a2"), _sent);
@@ -86,7 +86,7 @@ public sealed class ChatCoalescerTests
 
         Assert.Equal(CoalesceDecision.SendNow, c.TryCoalesce(Bot, "g1", "a"));
         _time.Advance(TimeSpan.FromMinutes(5));
-        await c.FlushDueAsync();
+        await c.FlushDueAsync(TestContext.Current.CancellationToken);
 
         Assert.Empty(_sent);
         Assert.Equal(0, c.OpenWindows);
@@ -101,7 +101,7 @@ public sealed class ChatCoalescerTests
         c.TryCoalesce(Bot, "g1", "a");
         c.TryCoalesce(Bot, "g1", "b");
         _time.Advance(TimeSpan.FromMinutes(5));
-        await c.FlushDueAsync();
+        await c.FlushDueAsync(TestContext.Current.CancellationToken);
         Assert.Single(_sent);
 
         _time.Advance(TimeSpan.FromMinutes(1));
@@ -115,7 +115,7 @@ public sealed class ChatCoalescerTests
 
         c.TryCoalesce(Bot, "g1", "a");
         c.TryCoalesce(Bot, "g1", "b");
-        await c.FlushAllAsync();
+        await c.FlushAllAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal((Bot, "g1", "b"), Assert.Single(_sent));
     }
@@ -146,7 +146,7 @@ public sealed class ChatCoalescerTests
         c.TryCoalesce(Bot, "g2", "a");
         c.TryCoalesce(Bot, "g2", "b");
         _time.Advance(TimeSpan.FromMinutes(5));
-        await c.FlushDueAsync();
+        await c.FlushDueAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(["g2"], sent);
     }

@@ -45,8 +45,8 @@ public class SignalCliGateTests
         Assert.True(gate.TryEnter());
 
         // Якби Wait(0) блокував — тест би завис; має повернутись миттєво false.
-        var task = Task.Run(gate.TryEnter);
-        var completed = await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(5)));
+        var task = Task.Run(gate.TryEnter, TestContext.Current.CancellationToken);
+        var completed = await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
         Assert.Same(task, completed); // TryEnter завершився сам (неблокуючий), не по таймауту
         Assert.False(await task);
     }

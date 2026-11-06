@@ -23,7 +23,7 @@ public class SignalAccountsRpcAdapterTests
 
         var adapter = CreateAdapter(facade);
 
-        var result = await adapter.ListAccounts();
+        var result = await adapter.ListAccounts(TestContext.Current.CancellationToken);
 
         Assert.Same(expected, result);
         facade.Verify(a => a.ListAccountsAsync(It.IsAny<CancellationToken>()), Times.Once);
@@ -38,7 +38,7 @@ public class SignalAccountsRpcAdapterTests
 
         var adapter = CreateAdapter(facade);
 
-        var ex = await Assert.ThrowsAsync<RpcErrorException>(() => adapter.ListAccounts());
+        var ex = await Assert.ThrowsAsync<RpcErrorException>(() => adapter.ListAccounts(TestContext.Current.CancellationToken));
 
         Assert.Equal(JsonRpcErrorCode.InvocationError, ex.ErrorCode);
     }

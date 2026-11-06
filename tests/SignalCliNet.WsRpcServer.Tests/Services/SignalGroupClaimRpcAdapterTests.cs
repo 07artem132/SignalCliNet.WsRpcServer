@@ -52,7 +52,7 @@ public sealed class SignalGroupClaimRpcAdapterTests : IDisposable
         var adapter = NewAdapter(new GroupClaimOptions { Enabled = false });
         using var _ = SignalCallContext.Enter(Principal(Caller));
 
-        var ex = await Assert.ThrowsAsync<RpcErrorException>(() => adapter.RequestGroupClaim());
+        var ex = await Assert.ThrowsAsync<RpcErrorException>(() => adapter.RequestGroupClaim(cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal(-32601, (int)ex.ErrorCode);
     }
 
@@ -62,7 +62,7 @@ public sealed class SignalGroupClaimRpcAdapterTests : IDisposable
         var adapter = NewAdapter();
         using var _ = SignalCallContext.Enter(Principal(Caller));
 
-        var response = await adapter.RequestGroupClaim();
+        var response = await adapter.RequestGroupClaim(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(string.IsNullOrWhiteSpace(response.Code));
         Assert.Equal(Start.AddMinutes(10), response.ExpiresAt);
@@ -76,7 +76,7 @@ public sealed class SignalGroupClaimRpcAdapterTests : IDisposable
             "b-1", Caller, "grp-x", "aci", Start.AddHours(720), false, Start));
         using var _ = SignalCallContext.Enter(Principal(Caller));
 
-        var ex = await Assert.ThrowsAsync<RpcErrorException>(() => adapter.RequestGroupClaim());
+        var ex = await Assert.ThrowsAsync<RpcErrorException>(() => adapter.RequestGroupClaim(cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal(GroupClaimErrorCodes.QuotaExceeded, (int)ex.ErrorCode);
     }
 
@@ -89,7 +89,7 @@ public sealed class SignalGroupClaimRpcAdapterTests : IDisposable
         _store.InsertGroupBinding(new GroupBindingRecord("b-other", "other", "grp-3", "aci", Start.AddHours(720), false, Start));
         using var _ = SignalCallContext.Enter(Principal(Caller));
 
-        var response = await adapter.ListMyBindings();
+        var response = await adapter.ListMyBindings(TestContext.Current.CancellationToken);
 
         Assert.Single(response.Bindings);
         Assert.Equal("b-mine", response.Bindings[0].BindingId);
@@ -102,7 +102,7 @@ public sealed class SignalGroupClaimRpcAdapterTests : IDisposable
         _store.InsertGroupBinding(new GroupBindingRecord("b-mine", Caller, "grp-1", "aci", Start.AddHours(720), false, Start));
         using var _ = SignalCallContext.Enter(Principal(Caller));
 
-        var response = await adapter.RevokeMyBinding("b-mine");
+        var response = await adapter.RevokeMyBinding("b-mine", TestContext.Current.CancellationToken);
 
         Assert.True(response.Revoked);
         Assert.True(_store.GetGroupBinding(Caller, "grp-1")!.Revoked);
@@ -115,7 +115,7 @@ public sealed class SignalGroupClaimRpcAdapterTests : IDisposable
         _store.InsertGroupBinding(new GroupBindingRecord("b-other", "other", "grp-3", "aci", Start.AddHours(720), false, Start));
         using var _ = SignalCallContext.Enter(Principal(Caller));
 
-        await Assert.ThrowsAsync<RpcErrorException>(() => adapter.RevokeMyBinding("b-other"));
+        await Assert.ThrowsAsync<RpcErrorException>(() => adapter.RevokeMyBinding("b-other", TestContext.Current.CancellationToken));
         Assert.False(_store.GetGroupBinding("other", "grp-3")!.Revoked); // чужий binding не чіпаємо
     }
 

@@ -53,7 +53,7 @@ public sealed class AuthnHandshakeDodTests : IAsyncLifetime
     private DeviceEnrollmentService _enrollment = null!;
     private int _port;
 
-    public async Task InitializeAsync()
+    public async ValueTask InitializeAsync()
     {
         Directory.CreateDirectory(Path.Combine(_dataDir, "secrets"));
         // Пеппер пишемо напряму (без повного SecureDeploymentHostedService — DoD цього файлу
@@ -127,7 +127,7 @@ public sealed class AuthnHandshakeDodTests : IAsyncLifetime
         Assert.True(_server.Start());
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         _server.Stop();
         _server.Dispose();
@@ -143,7 +143,7 @@ public sealed class AuthnHandshakeDodTests : IAsyncLifetime
             // best-effort прибирання темп-каталогу
         }
 
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
     // ---------------------------------------------------------------- 4.1 / 4.6 (T4)
@@ -153,7 +153,7 @@ public sealed class AuthnHandshakeDodTests : IAsyncLifetime
     {
         var identity = SeedIdentity("dod-expired");
         var (token, _) = _tokenService.IssueToken(identity, TimeSpan.FromMilliseconds(1));
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         using var ws = await ConnectAsync([token, RealProto]);
         var (code, reason) = await ReceiveCloseAsync(ws);
@@ -269,7 +269,7 @@ public sealed class AuthnHandshakeDodTests : IAsyncLifetime
     {
         var identity = SeedIdentity("dod-t4");
         var (token, _) = _tokenService.IssueToken(identity, TimeSpan.FromMilliseconds(1));
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         // Браузерний клієнт (Origin у allowlist): upgrade ЗАВЕРШУЄТЬСЯ (open досяжний), потім
         // close 4401 `expired` — на відміну від мережевого фейлу, де ConnectAsync кинув би виняток.
@@ -326,7 +326,7 @@ public sealed class AuthnHandshakeDodTests : IAsyncLifetime
 
         // Протухлий (НЕ revoked) токен тієї ж identity.
         var (expiredToken, expiredRecord) = _tokenService.IssueToken(identity, TimeSpan.FromMilliseconds(1));
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         // Браузерний fallback: конект БЕЗ токена → authenticate(expired) → challenge → PoP → новий токен.
         using var ws = await ConnectAsync([RealProto], origin: AllowedOrigin);

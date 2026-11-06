@@ -78,7 +78,7 @@ public sealed class SignalOnboardingRpcAdapterTests : IDisposable
         var creation = h.Invites.Create("admin-1", TimeSpan.FromHours(1), maxAttempts: 3);
         var spki = NewP256Spki();
 
-        var response = await h.Adapter.RedeemInvite(creation.Code, spki);
+        var response = await h.Adapter.RedeemInvite(creation.Code, spki, TestContext.Current.CancellationToken);
 
         Assert.False(string.IsNullOrWhiteSpace(response.IdentityId));
         Assert.False(string.IsNullOrWhiteSpace(response.Token));
@@ -107,7 +107,7 @@ public sealed class SignalOnboardingRpcAdapterTests : IDisposable
         var h = CreateHarness();
 
         var ex = await Assert.ThrowsAsync<RpcErrorException>(
-            () => h.Adapter.RedeemInvite("UNKNOWN-CODE-9999", NewP256Spki()));
+            () => h.Adapter.RedeemInvite("UNKNOWN-CODE-9999", NewP256Spki(), TestContext.Current.CancellationToken));
 
         Assert.Equal((JsonRpcErrorCode)SignalOnboardingRpcAdapter.InviteInvalidCode, ex.ErrorCode);
     }
@@ -117,12 +117,12 @@ public sealed class SignalOnboardingRpcAdapterTests : IDisposable
     {
         var h = CreateHarness();
         var creation = h.Invites.Create("admin-1", TimeSpan.FromHours(1), maxAttempts: 3);
-        await h.Adapter.RedeemInvite(creation.Code, NewP256Spki());
+        await h.Adapter.RedeemInvite(creation.Code, NewP256Spki(), TestContext.Current.CancellationToken);
 
         var unknown = await Assert.ThrowsAsync<RpcErrorException>(
-            () => h.Adapter.RedeemInvite("SOME-OTHER-CODE-42", NewP256Spki()));
+            () => h.Adapter.RedeemInvite("SOME-OTHER-CODE-42", NewP256Spki(), TestContext.Current.CancellationToken));
         var consumed = await Assert.ThrowsAsync<RpcErrorException>(
-            () => h.Adapter.RedeemInvite(creation.Code, NewP256Spki()));
+            () => h.Adapter.RedeemInvite(creation.Code, NewP256Spki(), TestContext.Current.CancellationToken));
 
         // Anti-oracle: погашений і невідомий код дають ІДЕНТИЧНУ помилку.
         Assert.Equal(unknown.ErrorCode, consumed.ErrorCode);
@@ -136,7 +136,7 @@ public sealed class SignalOnboardingRpcAdapterTests : IDisposable
         var creation = h.Invites.Create("admin-1", TimeSpan.FromHours(1), maxAttempts: 3);
 
         var ex = await Assert.ThrowsAsync<RpcErrorException>(
-            () => h.Adapter.RedeemInvite(creation.Code, "  "));
+            () => h.Adapter.RedeemInvite(creation.Code, "  ", TestContext.Current.CancellationToken));
 
         Assert.Equal(JsonRpcErrorCode.InvalidParams, ex.ErrorCode);
         // Порожній ключ відсіяно ДО consume — інвайт не спалено.
@@ -150,7 +150,7 @@ public sealed class SignalOnboardingRpcAdapterTests : IDisposable
         var creation = h.Invites.Create("admin-1", TimeSpan.FromHours(1), maxAttempts: 3);
 
         var ex = await Assert.ThrowsAsync<RpcErrorException>(
-            () => h.Adapter.RedeemInvite(creation.Code, "not-a-valid-spki-key"));
+            () => h.Adapter.RedeemInvite(creation.Code, "not-a-valid-spki-key", TestContext.Current.CancellationToken));
 
         Assert.Equal(JsonRpcErrorCode.InvalidParams, ex.ErrorCode);
     }
@@ -162,11 +162,11 @@ public sealed class SignalOnboardingRpcAdapterTests : IDisposable
         var creation = h.Invites.Create("admin-1", TimeSpan.FromHours(1), maxAttempts: 3);
 
         // Перший редемпшн з'їдає єдиний слот вікна.
-        await h.Adapter.RedeemInvite(creation.Code, NewP256Spki());
+        await h.Adapter.RedeemInvite(creation.Code, NewP256Spki(), TestContext.Current.CancellationToken);
 
         // Другий (будь-який код) відсікається soft rate-cap'ом ДО роботи з інвайтом → -32005.
         var ex = await Assert.ThrowsAsync<RpcErrorException>(
-            () => h.Adapter.RedeemInvite("ANY-OTHER-CODE-1", NewP256Spki()));
+            () => h.Adapter.RedeemInvite("ANY-OTHER-CODE-1", NewP256Spki(), TestContext.Current.CancellationToken));
 
         Assert.Equal((JsonRpcErrorCode)AdmissionErrorCodes.RateLimited, ex.ErrorCode);
     }

@@ -68,7 +68,7 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
                 account = AccountB,
                 recipients = new[] { AccountA },
                 message = "hi",
-            }));
+            }, TestContext.Current.CancellationToken));
 
         Assert.Equal(AccountIsolationGuard.UnauthorizedErrorCode, ex.ErrorCode);
         // Anti-enumeration: generic-текст без натяку на існування акаунта B.
@@ -87,7 +87,7 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
             account = AccountA,
             recipients = new[] { AccountB },
             message = "hi",
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.Equal("sent", result);
         Assert.True(target.Invoked);
@@ -127,7 +127,8 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
         var client = CreatePair(UserPrincipal(AccountA, "grp-1"), target);
 
         var response = await client.InvokeWithParameterObjectAsync<ListGroupsResponse>(
-            "listGroups", new { account = AccountA });
+            "listGroups", new { account = AccountA },
+            TestContext.Current.CancellationToken);
 
         Assert.Equal(["grp-1"], response.Items.Select(g => g.Id));
     }
@@ -142,7 +143,8 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
         var client = CreatePair(admin, target);
 
         var response = await client.InvokeWithParameterObjectAsync<ListGroupsResponse>(
-            "listGroups", new { account = AccountA });
+            "listGroups", new { account = AccountA },
+            TestContext.Current.CancellationToken);
 
         Assert.Empty(response.Items);
     }
@@ -186,7 +188,7 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
                 account = AccountA,
                 recipients = new[] { AccountB },
                 message = "hi",
-            }));
+            }, TestContext.Current.CancellationToken));
 
         Assert.False(target.Invoked, "Мертвий креденшел не сміє дійти до адаптера/signal-cli (D9).");
     }
@@ -202,7 +204,7 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
             account = AccountA,
             recipients = new[] { AccountB },
             message = "hi",
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.Equal("sent", result);
         Assert.True(target.Invoked);
@@ -222,7 +224,7 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
                 account = AccountA,
                 recipients = new[] { "not-a-number" },
                 message = "hi",
-            }));
+            }, TestContext.Current.CancellationToken));
 
         Assert.False(target.Invoked, "Малформований recipient не сміє дійти до signal-cli (S6).");
     }
@@ -243,7 +245,7 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
             account = AccountA,
             recipients = new[] { OwnGroupId },
             message = "hi",
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.Equal("sent", result);
         Assert.True(target.Invoked);
@@ -260,7 +262,7 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
             account = AccountA,
             recipients = new[] { OwnGroupId, AccountB },
             message = "hi",
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.Equal("sent", result);
         Assert.True(target.Invoked);
@@ -279,7 +281,7 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
                 account = AccountB,
                 recipients = new[] { OwnGroupId },
                 message = "hi",
-            }));
+            }, TestContext.Current.CancellationToken));
 
         Assert.Equal(AccountIsolationGuard.UnauthorizedErrorCode, ex.ErrorCode);
         Assert.False(target.Invoked);
@@ -297,7 +299,7 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
                 account = AccountA,
                 recipients = new[] { OwnGroupId, "not-a-number" },
                 message = "hi",
-            }));
+            }, TestContext.Current.CancellationToken));
 
         Assert.False(target.Invoked);
     }
@@ -331,7 +333,7 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
                 account = AccountA,
                 recipients = new[] { AccountB },
                 message = "hi",
-            }));
+            }, TestContext.Current.CancellationToken));
 
         Assert.True(admissionCalled, "Send-метод МУСИТЬ проходити admission.");
         Assert.Equal(AdmissionErrorCodes.RateLimited, ex.ErrorCode); // -32005
@@ -368,7 +370,7 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
             account = AccountA,
             recipients = new[] { AccountB },
             message = "hi",
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.Equal("sent", result);
         Assert.True(target.Invoked);
@@ -401,9 +403,9 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
         // Cap=2: два паралельні send зависають у таргеті, третій — понад cap → -32005.
         var client = CreatePair(SignalPrincipal.LoopbackFullAccess, target, maxInFlight: 2);
 
-        var t1 = client.InvokeWithParameterObjectAsync<string>("sendTextMessage", SendArgs());
-        var t2 = client.InvokeWithParameterObjectAsync<string>("sendTextMessage", SendArgs());
-        var t3 = client.InvokeWithParameterObjectAsync<string>("sendTextMessage", SendArgs());
+        var t1 = client.InvokeWithParameterObjectAsync<string>("sendTextMessage", SendArgs(), TestContext.Current.CancellationToken);
+        var t2 = client.InvokeWithParameterObjectAsync<string>("sendTextMessage", SendArgs(), TestContext.Current.CancellationToken);
+        var t3 = client.InvokeWithParameterObjectAsync<string>("sendTextMessage", SendArgs(), TestContext.Current.CancellationToken);
 
         // Чекаємо, поки рівно 2 виклики увійдуть у таргет (тримають in-flight слоти).
         await WaitUntilAsync(() => Volatile.Read(ref target.Entered) == 2);
@@ -427,7 +429,7 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
 
         // Лічильник повернувся: after Release() таргет більше не блокує, а in-flight = 0 —
         // черговий send на тій самій сесії проходить попри той самий cap=2.
-        var ok = await client.InvokeWithParameterObjectAsync<string>("sendTextMessage", SendArgs());
+        var ok = await client.InvokeWithParameterObjectAsync<string>("sendTextMessage", SendArgs(), TestContext.Current.CancellationToken);
         Assert.Equal("sent", ok);
     }
 
@@ -442,7 +444,7 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
         var client = CreatePair(SignalPrincipal.LoopbackFullAccess, target, signalCliGate: gate);
 
         var ex = await Assert.ThrowsAsync<RemoteInvocationException>(
-            () => client.InvokeWithParameterObjectAsync<string>("sendTextMessage", SendArgs()));
+            () => client.InvokeWithParameterObjectAsync<string>("sendTextMessage", SendArgs(), TestContext.Current.CancellationToken));
 
         Assert.Equal(AdmissionErrorCodes.RateLimited, ex.ErrorCode);
         Assert.False(target.Invoked, "Зайнятий G6-гейт не сміє пускати dispatch до signal-cli.");
@@ -501,7 +503,7 @@ public sealed class AuthzChokepointDispatchTests : IDisposable
         var client = CreatePair(user, target);
 
         var ex = await Assert.ThrowsAsync<RemoteInvocationException>(
-            () => client.InvokeWithParameterObjectAsync<string>("revokeIdentity", new { identityId = "victim" }));
+            () => client.InvokeWithParameterObjectAsync<string>("revokeIdentity", new { identityId = "victim" }, TestContext.Current.CancellationToken));
 
         Assert.Equal(AccountIsolationGuard.UnauthorizedErrorCode, ex.ErrorCode);
         Assert.False(target.Invoked);

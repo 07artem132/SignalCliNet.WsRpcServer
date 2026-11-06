@@ -73,12 +73,12 @@ public sealed class GroupClaimDodTests : IDisposable
     {
         ClaimGroup("U", GroupG, AciU);
 
-        var allowed = await _gate.EvaluateAsync("U", Account, GroupG);
+        var allowed = await _gate.EvaluateAsync("U", Account, GroupG, TestContext.Current.CancellationToken);
         Assert.True(allowed.Allowed);
 
         // B без claim на G → NoBinding.
         _store.UpsertIdentity(new IdentityRecord("B", "user", [], DateTimeOffset.UtcNow));
-        var denied = await _gate.EvaluateAsync("B", Account, GroupG);
+        var denied = await _gate.EvaluateAsync("B", Account, GroupG, TestContext.Current.CancellationToken);
         Assert.False(denied.Allowed);
         Assert.Equal(GroupSendDenyReason.NoBinding, denied.Reason);
     }
@@ -107,12 +107,12 @@ public sealed class GroupClaimDodTests : IDisposable
     public async Task AnchorSelf_KickedFromGroup_SendRejected_BindingInvalidated()
     {
         ClaimGroup("U", GroupG, AciU);
-        Assert.True((await _gate.EvaluateAsync("U", Account, GroupG)).Allowed);
+        Assert.True((await _gate.EvaluateAsync("U", Account, GroupG, TestContext.Current.CancellationToken)).Allowed);
 
         // U (anchor) вигнаний із G — member-list більше не містить AciU.
         SetMembers(GroupG, AciP);
 
-        var decision = await _gate.EvaluateAsync("U", Account, GroupG);
+        var decision = await _gate.EvaluateAsync("U", Account, GroupG, TestContext.Current.CancellationToken);
         Assert.False(decision.Allowed);
         Assert.Equal(GroupSendDenyReason.AnchorNotMember, decision.Reason);
 
@@ -128,12 +128,12 @@ public sealed class GroupClaimDodTests : IDisposable
     {
         // Код U вставив поручитель P → binding U, anchor=P (право живе з поручителем, T2).
         ClaimGroup("U", GroupG, AciP);
-        Assert.True((await _gate.EvaluateAsync("U", Account, GroupG)).Allowed);
+        Assert.True((await _gate.EvaluateAsync("U", Account, GroupG, TestContext.Current.CancellationToken)).Allowed);
 
         // P (anchor) вийшов із G.
         SetMembers(GroupG, AciU);   // U сам у групі, але anchor=P — його немає
 
-        var decision = await _gate.EvaluateAsync("U", Account, GroupG);
+        var decision = await _gate.EvaluateAsync("U", Account, GroupG, TestContext.Current.CancellationToken);
         Assert.False(decision.Allowed);
         Assert.Equal(GroupSendDenyReason.AnchorNotMember, decision.Reason);
     }
@@ -152,14 +152,14 @@ public sealed class GroupClaimDodTests : IDisposable
         // Той самий код у другій групі після consume → відмова (T3, one-time).
         Assert.False(_claims.Confirm(hash, GroupH, AciU));
 
-        Assert.True((await _gate.EvaluateAsync("U", Account, GroupG)).Allowed);
+        Assert.True((await _gate.EvaluateAsync("U", Account, GroupG, TestContext.Current.CancellationToken)).Allowed);
 
         // revokeMyBinding прибирає небажаний binding → send більше не проходить.
         var binding = _store.GetGroupBinding("U", GroupG);
         Assert.NotNull(binding);
         _store.RevokeGroupBinding(binding!.BindingId);
 
-        var afterRevoke = await _gate.EvaluateAsync("U", Account, GroupG);
+        var afterRevoke = await _gate.EvaluateAsync("U", Account, GroupG, TestContext.Current.CancellationToken);
         Assert.False(afterRevoke.Allowed);
         Assert.Equal(GroupSendDenyReason.NoBinding, afterRevoke.Reason);
     }

@@ -13,7 +13,7 @@ public class SystemRpcAdapterTests
     {
         var adapter = new SystemRpcAdapter();
 
-        var result = await adapter.Ping();
+        var result = await adapter.Ping(TestContext.Current.CancellationToken);
 
         Assert.Equal("pong", result);
     }
@@ -23,7 +23,7 @@ public class SystemRpcAdapterTests
     {
         var adapter = new SystemRpcAdapter();
 
-        var result = await adapter.Handshake(SignalRpcApiVersion.Current);
+        var result = await adapter.Handshake(SignalRpcApiVersion.Current, TestContext.Current.CancellationToken);
 
         Assert.Equal(SignalRpcApiVersion.Current, result.ApiVersion);
         Assert.Equal(SignalRpcApiVersion.MinimumSupported, result.MinimumApiVersion);
@@ -36,7 +36,7 @@ public class SystemRpcAdapterTests
         var adapter = new SystemRpcAdapter();
 
         var ex = await Assert.ThrowsAsync<RpcErrorException>(
-            () => adapter.Handshake(SignalRpcApiVersion.Current + 1));
+            () => adapter.Handshake(SignalRpcApiVersion.Current + 1, TestContext.Current.CancellationToken));
 
         Assert.Equal(SignalRpcApiVersion.UpgradeRequiredErrorCode, (int)ex.ErrorCode);
         // Типізований ErrorData несе потрібну версію серверу (не тихий -32601).

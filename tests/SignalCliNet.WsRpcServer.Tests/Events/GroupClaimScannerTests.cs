@@ -41,7 +41,7 @@ public sealed class GroupClaimScannerTests
         scanner.Enqueue(Message("+15550009999", "just chatting no code here", "grp-1", "aci-anchor"));
         scanner.Enqueue(Message("+15550009999", $"please use {ValidCode} thanks", "grp-1", "aci-anchor"));
 
-        await confirmer.Signal.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await confirmer.Signal.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         var (hash, group, anchor) = Assert.Single(confirmer.Calls);   // лише код-повідомлення дало Confirm
         Assert.Equal(GroupClaimService.ComputeCodeHash(ValidCode), hash);
@@ -59,7 +59,7 @@ public sealed class GroupClaimScannerTests
         scanner.Enqueue(Message("+15550009999", $"code {ValidCode} in DM", groupId: null, anchorAci: "aci"));
         scanner.Enqueue(Message("+15550009999", $"code {ValidCode} in group", "grp-1", "aci"));
 
-        await confirmer.Signal.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await confirmer.Signal.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.Single(confirmer.Calls);            // лише груповий код
         Assert.Equal("grp-1", confirmer.Calls[0].GroupId);
@@ -74,7 +74,7 @@ public sealed class GroupClaimScannerTests
 
         scanner.Enqueue(Message("+15550009999", $"{SecretBody} {ValidCode}", "grp-1", "aci-anchor"));
 
-        await confirmer.Signal.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await confirmer.Signal.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.False(log.AnyContains(SecretBody), "тіло повідомлення потрапило в лог (privacy 3.1)");
         Assert.False(log.AnyContains(Phone), "номер відправника потрапив у лог (privacy 3.1)");

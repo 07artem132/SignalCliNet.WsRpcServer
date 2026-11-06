@@ -34,7 +34,7 @@ public class SignalMessageRpcAdapterTests
 
         var adapter = CreateAdapter(facade);
 
-        var result = await adapter.SendTextMessage("+10000000001", ["+10000000002"], "hi");
+        var result = await adapter.SendTextMessage("+10000000001", ["+10000000002"], "hi", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Same(expected, result);
         facade.Verify(m => m.SendTextMessageAsync(It.IsAny<TextMessageOptions>(), It.IsAny<CancellationToken>()),
@@ -51,7 +51,7 @@ public class SignalMessageRpcAdapterTests
         var adapter = CreateAdapter(facade);
 
         var ex = await Assert.ThrowsAsync<RpcErrorException>(
-            () => adapter.SendTextMessage(account!, ["+10000000002"], "hi"));
+            () => adapter.SendTextMessage(account!, ["+10000000002"], "hi", cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(JsonRpcErrorCode.InvalidParams, ex.ErrorCode);
         facade.Verify(m => m.SendTextMessageAsync(It.IsAny<TextMessageOptions>(), It.IsAny<CancellationToken>()),
@@ -65,7 +65,7 @@ public class SignalMessageRpcAdapterTests
         var adapter = CreateAdapter(facade);
 
         var ex = await Assert.ThrowsAsync<RpcErrorException>(
-            () => adapter.SendTextMessage("+10000000001", [" ", ""], "hi"));
+            () => adapter.SendTextMessage("+10000000001", [" ", ""], "hi", cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(JsonRpcErrorCode.InvalidParams, ex.ErrorCode);
         facade.Verify(m => m.SendTextMessageAsync(It.IsAny<TextMessageOptions>(), It.IsAny<CancellationToken>()),
@@ -82,7 +82,7 @@ public class SignalMessageRpcAdapterTests
         var adapter = CreateAdapter(facade);
 
         var ex = await Assert.ThrowsAsync<RpcErrorException>(
-            () => adapter.SendTextMessage("+10000000001", ["+10000000002"], "hi"));
+            () => adapter.SendTextMessage("+10000000001", ["+10000000002"], "hi", cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(JsonRpcErrorCode.InvocationError, ex.ErrorCode);
     }
@@ -99,7 +99,7 @@ public class SignalMessageRpcAdapterTests
         var adapter = new SignalMessageRpcAdapter(facade.Object, CreateMapper(gate), NullLogger<SignalMessageRpcAdapter>.Instance);
 
         var ex = await Assert.ThrowsAsync<RpcErrorException>(
-            () => adapter.SendTextMessage("+10000000001", ["+10000000002"], "hi"));
+            () => adapter.SendTextMessage("+10000000001", ["+10000000002"], "hi", cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(-32005, (int)ex.ErrorCode);
         Assert.Equal(["rate-limit"], gate.Pauses);

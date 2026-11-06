@@ -121,7 +121,8 @@ public sealed class TeamNotifyDodTests : IDisposable
 
         // Поряд із валідним alias (gated send) малформований → -32602 (формат), не -32007.
         var mixed = await Assert.ThrowsAsync<RemoteMethodNotFoundException>(() => client.InvokeWithParameterObjectAsync<SendMessageResponse>(
-            "sendTextMessage", new { account = Bot, recipients = new[] { "alias:dir:1", "alias:Bad Alias!" }, message = "x" }));
+            "sendTextMessage", new { account = Bot, recipients = new[] { "alias:dir:1", "alias:Bad Alias!" }, message = "x" },
+            TestContext.Current.CancellationToken));
         Assert.Equal(JsonRpcErrorCode.InvalidParams, mixed.ErrorCode);
 
         // Сам по собі — не gated send: shared-bot акаунт не належить caller-у → -32001.
@@ -214,7 +215,7 @@ public sealed class TeamNotifyDodTests : IDisposable
         Assert.Equal(0, retry.TimeStamp);
 
         _time.Advance(TimeSpan.FromMinutes(5));
-        await coalescer.FlushDueAsync();
+        await coalescer.FlushDueAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(2, _sent.Count);
         Assert.Equal("two" + ChatCoalescer.Separator + "three", _sent[1].Message);
