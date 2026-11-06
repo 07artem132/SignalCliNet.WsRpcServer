@@ -74,7 +74,9 @@ dotnet run --project src/SignalCliNet.WsRpcServer
 | `SignalCli:HealthCheckTimeoutSeconds` | `10` | Таймаут health-ping. |
 | `Server:GroupClaim:Enabled` | `false` | **Опт-ін.** Group-claim гейт (`add-group-claim-receive`). `false` ⇒ сканер/роутер/send-gate неактивні; режим receive задає `SignalCli:ContinuousReceive` (дефолт — безперервний). `true` ⇒ форсує безперервний receive незалежно від `SignalCli:ContinuousReceive` + gating групових send'ів claim'ом. |
 | `Server:GroupClaim:ClaimTtlMinutes` | `10` | TTL one-time claim-коду (1..1440). |
-| `Server:GroupClaim:BindingTtlHours` | `720` | Backstop-TTL `(identity, group)` binding-у — форсує періодичний re-claim (1..8760). |
+| `Server:GroupClaim:BindingTtlHours` | `720` | TTL прив'язки групи (per-identity і командної), 1..8760. З `AutoRenewBindings=true` поновлюється, поки anchor у групі; інакше форсує періодичний re-claim. |
+| `Server:GroupClaim:AutoRenewBindings` | `true` | Автоподовження прив'язок (`add-binding-auto-renew`): прив'язка у вікні поновлення отримує новий `BindingTtlHours`, якщо anchor досі член групи на shared-bot акаунті. Anchor вийшов → не поновлюється. `false` = строгий backstop. |
+| `Server:GroupClaim:BindingRenewWindowHours` | `168` | За скільки годин до спливу прив'язка стає кандидатом на поновлення (1..8760; у рантаймі ≤ половини `BindingTtlHours`). Прохід — щогодини або частіше для коротких вікон. |
 | `Server:GroupClaim:MaxActiveBindingsPerIdentity` | `20` | Cap активних bindings на identity (footprint D2, 1..1000). Понад → `requestGroupClaim` = `-32008`. |
 | `Server:GroupClaim:ClaimRequestsPerHourPerIdentity` | `10` | Per-identity rate-cap `requestGroupClaim` за ковзну годину (1..1000). Понад → `-32005`. |
 | `Server:GroupClaim:MemberCacheTtlSeconds` | `60` | TTL кешу member-list групи для anchor-перевірки (T2, 5..3600). |

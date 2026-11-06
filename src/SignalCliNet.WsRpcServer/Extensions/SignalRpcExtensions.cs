@@ -115,6 +115,10 @@ public static class SignalRpcExtensions
         services.AddSingleton<ChatCoalescer>();
         services.AddHostedService<ChatCoalescerHostedService>();
 
+        // Автоподовження прив'язок груп (add-binding-auto-renew): поновлює TTL активних прив'язок, поки anchor у
+        // групі. Інертний, коли Server:GroupClaim:Enabled або AutoRenewBindings вимкнено.
+        services.AddHostedService<GroupBindingRenewalService>();
+
         // Server hosted service (плейн token-порт)
         services.AddHostedService<SignalRpcHostedService>();
 

@@ -32,6 +32,21 @@ public sealed class GroupClaimOptions
     [Range(1, 8760)]
     public int BindingTtlHours { get; set; } = 720;
 
+    /// <summary>
+    /// Whether active bindings are renewed automatically before they expire (add-binding-auto-renew). Default
+    /// <c>true</c>: a binding whose anchor is still a member of the group gets a fresh <see cref="BindingTtlHours"/>
+    /// once it enters the <see cref="BindingRenewWindowHours"/> window, so a quiet group does not silently lose its
+    /// binding. <c>false</c> restores the strict backstop (re-claim every <see cref="BindingTtlHours"/>).
+    /// </summary>
+    public bool AutoRenewBindings { get; set; } = true;
+
+    /// <summary>
+    /// How long before expiry a binding becomes eligible for auto-renewal, in hours (1..8760). Default 168 (7 days).
+    /// Capped at half of <see cref="BindingTtlHours"/> at runtime, so a renewed binding is not renewed again on every pass.
+    /// </summary>
+    [Range(1, 8760)]
+    public int BindingRenewWindowHours { get; set; } = 168;
+
     /// <summary>Per-identity cap on active (non-revoked, non-expired) group-bindings (1..1000). Default 20 (D2 footprint).</summary>
     [Range(1, 1000)]
     public int MaxActiveBindingsPerIdentity { get; set; } = 20;
