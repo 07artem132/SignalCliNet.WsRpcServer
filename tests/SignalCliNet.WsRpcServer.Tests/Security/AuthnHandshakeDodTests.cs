@@ -53,7 +53,7 @@ public sealed class AuthnHandshakeDodTests : IAsyncLifetime
     private DeviceEnrollmentService _enrollment = null!;
     private int _port;
 
-    public async Task InitializeAsync()
+    public async ValueTask InitializeAsync()
     {
         Directory.CreateDirectory(Path.Combine(_dataDir, "secrets"));
         // Пеппер пишемо напряму (без повного SecureDeploymentHostedService — DoD цього файлу
@@ -127,7 +127,7 @@ public sealed class AuthnHandshakeDodTests : IAsyncLifetime
         Assert.True(_server.Start());
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         _server.Stop();
         _server.Dispose();
@@ -143,7 +143,7 @@ public sealed class AuthnHandshakeDodTests : IAsyncLifetime
             // best-effort прибирання темп-каталогу
         }
 
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
     // ---------------------------------------------------------------- 4.1 / 4.6 (T4)

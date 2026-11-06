@@ -20,9 +20,13 @@ This app supplies the concrete subclasses + adapters that wire Signal's facades 
 external clients (any language that speaks WebSocket + JSON-RPC) can send messages, manage accounts, link
 devices, and subscribe to incoming events without implementing HTTP/SSE plumbing.
 
-- Target framework: **net10.0**, `OutputType=Exe`. Assembly version **2.3.4** (in the csproj).
+- Target framework: **net10.0**, `OutputType=Exe`. Assembly version — `AssemblyVersion`/`FileVersion` in the csproj (bumped by `scripts/auto-release.sh`).
 - Requires **JDK 25** at runtime (signal-cli 0.14.6); the Docker image pulls Temurin 25 automatically.
-- Pinned upstream versions: **SignalCli.NET 4.10.4**, **JSON-RPC.NET 2.8.1**, **SignalCli.Runtime 0.14.6.1**.
+- Pinned upstream versions: **SignalCli.NET 4.11.0**, **JSON-RPC.NET 2.9.0**, **SignalCli.Runtime 0.14.6.1**.
+- **Releases are automatic:** every push to `main` runs `.github/workflows/auto-release.yml` → `scripts/auto-release.sh`
+  (PRC model). A version raised in the PR (with its CHANGELOG section) is tagged as-is; otherwise a shipped-surface change
+  gets a conventional-commit bump committed as `release: X.Y.Z` (the filled `[Unreleased]` becomes the release section).
+  The tag then dispatches `release.yml` (binaries, bundles, GitHub Release). Don't push `v*` tags by hand.
 
 ## Build & run
 

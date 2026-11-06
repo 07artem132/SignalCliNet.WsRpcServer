@@ -24,7 +24,7 @@
     <!-- Пін проти транзитивної вразливості StreamJsonRpc → MessagePack 2.5.192
          (GHSA-hv8m-jj95-wg3x); дзеркалить основний проєкт. Приклад використовує
          System.Text.Json-форматтер, не MessagePack — пін лише для чистого restore. -->
-    <PackageReference Include="MessagePack" Version="2.5.307" />
+    <PackageReference Include="MessagePack" Version="3.1.12" />
   </ItemGroup>
 
 </Project>

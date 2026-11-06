@@ -5,19 +5,20 @@
         <TargetFramework>net10.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
-        <AssemblyVersion>2.3.4</AssemblyVersion>
-        <FileVersion>2.3.4</FileVersion>
+        <AssemblyVersion>2.4.0</AssemblyVersion>
+        <FileVersion>2.4.0</FileVersion>
     </PropertyGroup>
 
     <ItemGroup>
-      <PackageReference Include="JSON-RPC.NET" Version="2.8.1" />
+      <PackageReference Include="JSON-RPC.NET" Version="2.9.0" />
       <!-- Durable-стор (G4/R3.7): embedded SQLite. Microsoft-мейнтейнений провайдер, без відомих CVE;
            10.0.x у лінії net10. Тягне SQLitePCLRaw.bundle_e_sqlite3 (нативний SQLite) — з nuget.org. -->
       <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.14" />
       <!-- Explicit floor транзитивного SQLitePCLRaw: ≤2.1.11 має GHSA-2m69-gcr7-jv3q (вразливий бандл
            нативного SQLite). Microsoft.Data.Sqlite 10.0.14 сам тягне 2.1.13; пін лишаємо як нижню межу,
-           щоб downgrade Sqlite не повернув вразливий бандл. Лінія 2.1.x (3.x — мажор). -->
-      <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.14" />
+           щоб downgrade Sqlite не повернув вразливий бандл. Лінія 3.x: Microsoft.Data.Sqlite 10.0.14 декларує
+           2.1.13, але 576 тестів (35 файлів на SqliteConnection) і self-contained publish linux/win проходять на 3.0.5. -->
+      <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
       <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.14" />
       <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.14" />
       <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.14" />
@@ -30,14 +31,14 @@
       <!-- CRC32 для checksum-сегмента opaque-токена (fast-reject малформлених токенів БЕЗ
            звернення до стору й HMAC). Microsoft-мейнтейнений, 10.0.x у лінії net10; з nuget.org. -->
       <PackageReference Include="System.IO.Hashing" Version="10.0.14" />
-      <PackageReference Include="SignalCli.NET" Version="4.10.4" />
+      <PackageReference Include="SignalCli.NET" Version="4.11.0" />
       <PackageReference Include="SignalCli.Runtime" Version="0.14.6.1" />
       <PackageReference Include="StreamJsonRpc" Version="2.26.150" />
       <!-- Закриваємо транзитивні вразливості StreamJsonRpc → MessagePack: 2.5.192
            (GHSA-hv8m-jj95-wg3x / NU1903) і 2.5.302 (GHSA-qhrr-8q5h-9q3h / NU1902).
-           2.5.307 — найновіша 2.5.x без відомих advisory; StreamJsonRpc 2.26.150 уже сам
-           тягне 2.5.307, пін лишаємо як нижню межу проти регресу при майбутньому bump. -->
-      <PackageReference Include="MessagePack" Version="2.5.307" />
+           StreamJsonRpc 2.26.150 сам тягне 2.5.307; ми на лінії 3.x (як JSON-RPC.NET 2.9.0, де
+           MessagePackFormatter перевірено на 3.1.12). Пін — нижня межа проти регресу. -->
+      <PackageReference Include="MessagePack" Version="3.1.12" />
     </ItemGroup>
 
     <ItemGroup>

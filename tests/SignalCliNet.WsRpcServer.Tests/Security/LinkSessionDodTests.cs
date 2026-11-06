@@ -50,7 +50,7 @@ public sealed class LinkSessionDodTests : IAsyncLifetime
     private int _port;
     private int _finishLinkCalls;
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         Directory.CreateDirectory(Path.Combine(_dataDir, "secrets"));
         File.WriteAllText(
@@ -112,10 +112,10 @@ public sealed class LinkSessionDodTests : IAsyncLifetime
             IPAddress.Loopback, _port, _services,
             _services.GetRequiredService<ILogger<SignalRpcServer>>());
         Assert.True(_server.Start());
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         _server.Stop();
         _server.Dispose();
@@ -131,7 +131,7 @@ public sealed class LinkSessionDodTests : IAsyncLifetime
             // best-effort прибирання темп-каталогу
         }
 
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
     // ---------------------------------------------------------------- DoD 7 (анти-griefing)
