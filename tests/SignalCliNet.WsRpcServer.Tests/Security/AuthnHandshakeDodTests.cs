@@ -153,7 +153,7 @@ public sealed class AuthnHandshakeDodTests : IAsyncLifetime
     {
         var identity = SeedIdentity("dod-expired");
         var (token, _) = _tokenService.IssueToken(identity, TimeSpan.FromMilliseconds(1));
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         using var ws = await ConnectAsync([token, RealProto]);
         var (code, reason) = await ReceiveCloseAsync(ws);
@@ -269,7 +269,7 @@ public sealed class AuthnHandshakeDodTests : IAsyncLifetime
     {
         var identity = SeedIdentity("dod-t4");
         var (token, _) = _tokenService.IssueToken(identity, TimeSpan.FromMilliseconds(1));
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         // Браузерний клієнт (Origin у allowlist): upgrade ЗАВЕРШУЄТЬСЯ (open досяжний), потім
         // close 4401 `expired` — на відміну від мережевого фейлу, де ConnectAsync кинув би виняток.
@@ -326,7 +326,7 @@ public sealed class AuthnHandshakeDodTests : IAsyncLifetime
 
         // Протухлий (НЕ revoked) токен тієї ж identity.
         var (expiredToken, expiredRecord) = _tokenService.IssueToken(identity, TimeSpan.FromMilliseconds(1));
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         // Браузерний fallback: конект БЕЗ токена → authenticate(expired) → challenge → PoP → новий токен.
         using var ws = await ConnectAsync([RealProto], origin: AllowedOrigin);

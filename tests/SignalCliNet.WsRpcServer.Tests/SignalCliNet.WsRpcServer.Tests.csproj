@@ -7,8 +7,6 @@
         <IsPackable>false</IsPackable>
         <!-- xunit v3: тестовий проєкт — самостійний виконуваний файл. -->
         <OutputType>Exe</OutputType>
-        <!-- xUnit1051 (xunit v3): порада передавати TestContext.Current.CancellationToken; косметика скасування, не коректність. -->
-        <NoWarn>$(NoWarn);xUnit1051</NoWarn>
         <IsTestProject>true</IsTestProject>
     </PropertyGroup>
 

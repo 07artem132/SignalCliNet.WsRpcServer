@@ -75,7 +75,7 @@ public sealed class SignalDevicesRpcAdapterTests : IDisposable
     {
         var h = CreateHarness();
 
-        var result = await h.Adapter.StartLink();
+        var result = await h.Adapter.StartLink(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(string.IsNullOrWhiteSpace(result.SessionId));
         Assert.Equal(Uri, result.DeviceLinkUri);
@@ -90,8 +90,8 @@ public sealed class SignalDevicesRpcAdapterTests : IDisposable
         h.Facade.Setup(d => d.FinishLinkAsync(Uri, "device", It.IsAny<CancellationToken>(), It.IsAny<TimeSpan?>()))
             .ReturnsAsync(new FinishLinkResponse("+10000000003"));
 
-        var started = await h.Adapter.StartLink();
-        var result = await h.Adapter.FinishLink(started.SessionId, "device");
+        var started = await h.Adapter.StartLink(cancellationToken: TestContext.Current.CancellationToken);
+        var result = await h.Adapter.FinishLink(started.SessionId, "device", TestContext.Current.CancellationToken);
 
         Assert.Equal("+10000000003", result.Number);
         // Клієнт передав лише sessionId — адаптер підставив справжній URI сесії в upstream.
@@ -111,8 +111,8 @@ public sealed class SignalDevicesRpcAdapterTests : IDisposable
                 (_, _, _, timeout) => capturedTimeout = timeout)
             .ReturnsAsync(new FinishLinkResponse("+10000000003"));
 
-        var started = await h.Adapter.StartLink();
-        await h.Adapter.FinishLink(started.SessionId, "dev");
+        var started = await h.Adapter.StartLink(cancellationToken: TestContext.Current.CancellationToken);
+        await h.Adapter.FinishLink(started.SessionId, "dev", TestContext.Current.CancellationToken);
 
         // W9: адаптер прокидає НЕ-null per-call timeout ≥130с (TTL сесії 120с + запас), щоб ручний скан
         // QR ≤120с не був убитий глобальним 30с RPC-таймаутом send-шляху (SignalCli.NET 4.10.2 seam).
@@ -128,25 +128,25 @@ public sealed class SignalDevicesRpcAdapterTests : IDisposable
         // --- unknown ---
         var h1 = CreateHarness();
         var unknown = await Assert.ThrowsAsync<RpcErrorException>(
-            () => h1.Adapter.FinishLink("no-such-session", "dev"));
+            () => h1.Adapter.FinishLink("no-such-session", "dev", TestContext.Current.CancellationToken));
 
         // --- foreign (сесію створила id-a, завершує id-b) ---
         var h2 = CreateHarness();
         string foreignSessionId;
         using (SignalCallContext.Enter(NonAdmin("id-a")))
-            foreignSessionId = (await h2.Adapter.StartLink()).SessionId;
+            foreignSessionId = (await h2.Adapter.StartLink(cancellationToken: TestContext.Current.CancellationToken)).SessionId;
 
         RpcErrorException foreign;
         using (SignalCallContext.Enter(NonAdmin("id-b")))
             foreign = await Assert.ThrowsAsync<RpcErrorException>(
-                () => h2.Adapter.FinishLink(foreignSessionId, "dev"));
+                () => h2.Adapter.FinishLink(foreignSessionId, "dev", TestContext.Current.CancellationToken));
 
         // --- expired ---
         var h3 = CreateHarness();
-        var expiredSessionId = (await h3.Adapter.StartLink()).SessionId;
+        var expiredSessionId = (await h3.Adapter.StartLink(cancellationToken: TestContext.Current.CancellationToken)).SessionId;
         h3.Clock.Advance(LinkSessionStore.SessionTtl);
         var expired = await Assert.ThrowsAsync<RpcErrorException>(
-            () => h3.Adapter.FinishLink(expiredSessionId, "dev"));
+            () => h3.Adapter.FinishLink(expiredSessionId, "dev", TestContext.Current.CancellationToken));
 
         // Anti-oracle: код і повідомлення ІДЕНТИЧНІ у всіх трьох випадках.
         Assert.Equal((JsonRpcErrorCode)SignalDevicesRpcAdapter.LinkSessionInvalidCode, unknown.ErrorCode);
@@ -165,15 +165,15 @@ public sealed class SignalDevicesRpcAdapterTests : IDisposable
 
         string sessionId;
         using (SignalCallContext.Enter(NonAdmin("id-a")))
-            sessionId = (await h.Adapter.StartLink()).SessionId;
+            sessionId = (await h.Adapter.StartLink(cancellationToken: TestContext.Current.CancellationToken)).SessionId;
 
         using (SignalCallContext.Enter(NonAdmin("id-b")))
-            await Assert.ThrowsAsync<RpcErrorException>(() => h.Adapter.FinishLink(sessionId, "dev"));
+            await Assert.ThrowsAsync<RpcErrorException>(() => h.Adapter.FinishLink(sessionId, "dev", TestContext.Current.CancellationToken));
 
         // Сесія A пережила griefing-спробу — власник A завершує успішно.
         FinishLinkResponse ok;
         using (SignalCallContext.Enter(NonAdmin("id-a")))
-            ok = await h.Adapter.FinishLink(sessionId, "dev");
+            ok = await h.Adapter.FinishLink(sessionId, "dev", TestContext.Current.CancellationToken);
 
         Assert.Equal("+10000000003", ok.Number);
     }
@@ -189,7 +189,7 @@ public sealed class SignalDevicesRpcAdapterTests : IDisposable
         RpcErrorException ex;
         using (SignalCallContext.Enter(NonAdmin("intruder")))
             ex = await Assert.ThrowsAsync<RpcErrorException>(
-                () => h.Adapter.StartLink("+15550000000"));
+                () => h.Adapter.StartLink("+15550000000", TestContext.Current.CancellationToken));
 
         Assert.Equal((JsonRpcErrorCode)AccountIsolationGuard.UnauthorizedErrorCode, ex.ErrorCode);
         // До upstream навіть не дійшли — відмова до StartLinkAsync.
@@ -205,7 +205,7 @@ public sealed class SignalDevicesRpcAdapterTests : IDisposable
 
         StartLinkSessionResponse? result = null;
         using (SignalCallContext.Enter(Admin("admin-1")))
-            result = await h.Adapter.StartLink("+15550000000");
+            result = await h.Adapter.StartLink("+15550000000", TestContext.Current.CancellationToken);
 
         Assert.NotNull(result);
         Assert.False(string.IsNullOrWhiteSpace(result!.SessionId));
@@ -220,8 +220,8 @@ public sealed class SignalDevicesRpcAdapterTests : IDisposable
 
         using (SignalCallContext.Enter(NonAdmin("id-a")))
         {
-            var started = await h.Adapter.StartLink();
-            await h.Adapter.FinishLink(started.SessionId, "dev");
+            var started = await h.Adapter.StartLink(cancellationToken: TestContext.Current.CancellationToken);
+            await h.Adapter.FinishLink(started.SessionId, "dev", TestContext.Current.CancellationToken);
         }
 
         var binding = h.Store.GetAccountBinding("+19998887777");
@@ -236,9 +236,9 @@ public sealed class SignalDevicesRpcAdapterTests : IDisposable
         var h = CreateHarness();
 
         for (var i = 0; i < LinkSessionStore.MaxStartsPerWindow; i++)
-            await h.Adapter.StartLink();
+            await h.Adapter.StartLink(cancellationToken: TestContext.Current.CancellationToken);
 
-        var ex = await Assert.ThrowsAsync<RpcErrorException>(() => h.Adapter.StartLink());
+        var ex = await Assert.ThrowsAsync<RpcErrorException>(() => h.Adapter.StartLink(cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal((JsonRpcErrorCode)AdmissionErrorCodes.RateLimited, ex.ErrorCode);
     }
 
@@ -250,8 +250,8 @@ public sealed class SignalDevicesRpcAdapterTests : IDisposable
         h.Facade.Setup(d => d.FinishLinkAsync(Uri, "dev", It.IsAny<CancellationToken>(), It.IsAny<TimeSpan?>()))
             .ReturnsAsync(new FinishLinkResponse("+19998887777"));
 
-        var started = await h.Adapter.StartLink();
-        await h.Adapter.FinishLink(started.SessionId, "dev");
+        var started = await h.Adapter.StartLink(cancellationToken: TestContext.Current.CancellationToken);
+        await h.Adapter.FinishLink(started.SessionId, "dev", TestContext.Current.CancellationToken);
 
         // Redact (task 6): сирий device-link URI не з'являється в жодному лог-рядку адаптера.
         Assert.False(capturing.AnyContains(Uri), "Device-link URI не має потрапляти в лог.");

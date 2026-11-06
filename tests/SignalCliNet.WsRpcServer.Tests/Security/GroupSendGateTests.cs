@@ -78,7 +78,7 @@ public sealed class GroupSendGateTests : IDisposable
         InsertBinding("b-1", "aci-anchor");
         SetGroupMembers("aci-anchor", "aci-other");
 
-        var decision = await gate.EvaluateAsync(Caller, SharedBotAccount, GroupId);
+        var decision = await gate.EvaluateAsync(Caller, SharedBotAccount, GroupId, TestContext.Current.CancellationToken);
 
         Assert.True(decision.Allowed);
     }
@@ -89,7 +89,7 @@ public sealed class GroupSendGateTests : IDisposable
         var gate = NewGate();
         SetGroupMembers("aci-anchor");
 
-        var decision = await gate.EvaluateAsync(Caller, SharedBotAccount, GroupId);
+        var decision = await gate.EvaluateAsync(Caller, SharedBotAccount, GroupId, TestContext.Current.CancellationToken);
 
         Assert.False(decision.Allowed);
         Assert.Equal(GroupSendDenyReason.NoBinding, decision.Reason);
@@ -102,7 +102,7 @@ public sealed class GroupSendGateTests : IDisposable
         InsertBinding("b-1", "aci-anchor");
         SetGroupMembers("aci-someone-else"); // anchor вигнаний
 
-        var decision = await gate.EvaluateAsync(Caller, SharedBotAccount, GroupId);
+        var decision = await gate.EvaluateAsync(Caller, SharedBotAccount, GroupId, TestContext.Current.CancellationToken);
 
         Assert.False(decision.Allowed);
         Assert.Equal(GroupSendDenyReason.AnchorNotMember, decision.Reason);
@@ -116,7 +116,7 @@ public sealed class GroupSendGateTests : IDisposable
         InsertBinding("b-1", "aci-anchor", expiresAt: Start.AddMinutes(-1)); // прострочений backstop-TTL
         SetGroupMembers("aci-anchor");
 
-        var decision = await gate.EvaluateAsync(Caller, SharedBotAccount, GroupId);
+        var decision = await gate.EvaluateAsync(Caller, SharedBotAccount, GroupId, TestContext.Current.CancellationToken);
 
         Assert.False(decision.Allowed);
         Assert.Equal(GroupSendDenyReason.NoBinding, decision.Reason);

@@ -24,7 +24,7 @@ public class SignalGroupsRpcAdapterTests
 
         var adapter = CreateAdapter(facade);
 
-        var result = await adapter.ListGroups("+10000000001");
+        var result = await adapter.ListGroups("+10000000001", TestContext.Current.CancellationToken);
 
         Assert.Same(expected, result);
     }
@@ -38,7 +38,7 @@ public class SignalGroupsRpcAdapterTests
         var facade = new Mock<ISignalGroups>();
         var adapter = CreateAdapter(facade);
 
-        var ex = await Assert.ThrowsAsync<RpcErrorException>(() => adapter.ListGroups(account!));
+        var ex = await Assert.ThrowsAsync<RpcErrorException>(() => adapter.ListGroups(account!, TestContext.Current.CancellationToken));
 
         Assert.Equal(JsonRpcErrorCode.InvalidParams, ex.ErrorCode);
         facade.Verify(g => g.ListGroupsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -53,7 +53,7 @@ public class SignalGroupsRpcAdapterTests
 
         var adapter = CreateAdapter(facade);
 
-        var ex = await Assert.ThrowsAsync<RpcErrorException>(() => adapter.ListGroups("+10000000001"));
+        var ex = await Assert.ThrowsAsync<RpcErrorException>(() => adapter.ListGroups("+10000000001", TestContext.Current.CancellationToken));
 
         Assert.Equal(JsonRpcErrorCode.InvocationError, ex.ErrorCode);
     }

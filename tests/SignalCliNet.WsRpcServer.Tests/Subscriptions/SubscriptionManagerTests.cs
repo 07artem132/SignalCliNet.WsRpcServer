@@ -38,7 +38,7 @@ public class SubscriptionManagerTests
         var events = EventsReturning(42);
         var manager = CreateManager(events);
 
-        var id = await manager.Subscribe(Guid.NewGuid(), "+10000000001", [SignalEventTypes.TextMessages]);
+        var id = await manager.Subscribe(Guid.NewGuid(), "+10000000001", [SignalEventTypes.TextMessages], TestContext.Current.CancellationToken);
 
         Assert.True(id > 0);
         events.Verify(e => e.SubscribeAsync("+10000000001", It.IsAny<CancellationToken>()), Times.Once);
@@ -53,10 +53,10 @@ public class SubscriptionManagerTests
 
         // MaxSubscriptionsPerClient default = 10
         for (var i = 0; i < 10; i++)
-            await manager.Subscribe(client, "+1000000000" + i, [SignalEventTypes.TextMessages]);
+            await manager.Subscribe(client, "+1000000000" + i, [SignalEventTypes.TextMessages], TestContext.Current.CancellationToken);
 
         await Assert.ThrowsAsync<RpcErrorException>(
-            () => manager.Subscribe(client, "+19999999999", [SignalEventTypes.TextMessages]));
+            () => manager.Subscribe(client, "+19999999999", [SignalEventTypes.TextMessages], TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -66,7 +66,7 @@ public class SubscriptionManagerTests
         var manager = CreateManager(events);
 
         await Assert.ThrowsAsync<ArgumentException>(
-            () => manager.Subscribe(Guid.NewGuid(), "+10000000001", [SignalEventTypes.None]));
+            () => manager.Subscribe(Guid.NewGuid(), "+10000000001", [SignalEventTypes.None], TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -82,7 +82,7 @@ public class SubscriptionManagerTests
             .ToArray();
 
         // Якщо база самозаблокувалась — WhenAll зависне; таймаут перетворює це на падіння тесту.
-        var ids = await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(10));
+        var ids = await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
         Assert.Equal(20, ids.Distinct().Count());
     }
@@ -94,7 +94,7 @@ public class SubscriptionManagerTests
         var manager = CreateManager(events);
         var client = Guid.NewGuid();
 
-        await manager.Subscribe(client, "+10000000001", [SignalEventTypes.TextMessages]);
+        await manager.Subscribe(client, "+10000000001", [SignalEventTypes.TextMessages], TestContext.Current.CancellationToken);
 
         var clients = manager.GetClientsForEvent(
             EventArgs(42, "+10000000001"), SignalEventTypes.TextMessages);
@@ -112,7 +112,8 @@ public class SubscriptionManagerTests
         var client = Guid.NewGuid();
 
         await manager.Subscribe(client, "+10000000001",
-            [SignalEventTypes.TextMessages, SignalEventTypes.Reactions]);
+            [SignalEventTypes.TextMessages, SignalEventTypes.Reactions],
+            TestContext.Current.CancellationToken);
 
         var forText = manager.GetClientsForEvent(EventArgs(42, "+10000000001"), SignalEventTypes.TextMessages);
         var forReactions = manager.GetClientsForEvent(EventArgs(42, "+10000000001"), SignalEventTypes.Reactions);

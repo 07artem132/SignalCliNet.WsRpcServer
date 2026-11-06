@@ -59,7 +59,7 @@ public sealed class SignalTeamRpcAdapterTests : IDisposable
         Join(team.Id, "m-1", TeamRoles.Member);
         using var _ = As("m-1");
 
-        var ex = await Assert.ThrowsAsync<RpcErrorException>(() => _adapter.CreateTeamInvite(maxRedemptions: 5));
+        var ex = await Assert.ThrowsAsync<RpcErrorException>(() => _adapter.CreateTeamInvite(maxRedemptions: 5, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(AccountIsolationGuard.UnauthorizedErrorCode, (int)ex.ErrorCode);
         Assert.DoesNotContain(_store.GetAuditEntries(), e => e.EventType == "team_invite_created");
@@ -72,7 +72,7 @@ public sealed class SignalTeamRpcAdapterTests : IDisposable
         Join(team.Id, "ta-1", TeamRoles.TeamAdmin);
         using var _ = As("ta-1");
 
-        var response = await _adapter.CreateTeamInvite(maxRedemptions: 5);
+        var response = await _adapter.CreateTeamInvite(maxRedemptions: 5, cancellationToken: TestContext.Current.CancellationToken);
 
         var invite = _store.GetInvite(InviteService.ComputeCodeHash(response.Code))!;
         Assert.Equal((team.Id, TeamRoles.Member, 5), (invite.TeamId, invite.TeamRole, invite.MaxRedemptions));
@@ -85,7 +85,7 @@ public sealed class SignalTeamRpcAdapterTests : IDisposable
         Join(team.Id, "ta-1", TeamRoles.TeamAdmin);
         using var _ = As("ta-1");
 
-        var ex = await Assert.ThrowsAsync<RpcErrorException>(() => _adapter.RemoveTeamMember("ta-1"));
+        var ex = await Assert.ThrowsAsync<RpcErrorException>(() => _adapter.RemoveTeamMember("ta-1", TestContext.Current.CancellationToken));
 
         Assert.Equal(TeamErrorCodes.LastTeamAdmin, (int)ex.ErrorCode);
         Assert.Equal(TeamRoles.TeamAdmin, _store.GetTeamMember("ta-1")!.TeamRole);
@@ -99,9 +99,9 @@ public sealed class SignalTeamRpcAdapterTests : IDisposable
         Join(team.Id, "ta-1", TeamRoles.TeamAdmin);
         using var _ = As("ta-1");
 
-        await Assert.ThrowsAsync<RpcErrorException>(() => _adapter.CreateTeamInvite(maxRedemptions: 0));
-        await Assert.ThrowsAsync<RpcErrorException>(() => _adapter.CreateTeamInvite(teamRole: "owner"));
-        await Assert.ThrowsAsync<RpcErrorException>(() => _adapter.SetTeamRole("ta-1", "owner"));
+        await Assert.ThrowsAsync<RpcErrorException>(() => _adapter.CreateTeamInvite(maxRedemptions: 0, cancellationToken: TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<RpcErrorException>(() => _adapter.CreateTeamInvite(teamRole: "owner", cancellationToken: TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<RpcErrorException>(() => _adapter.SetTeamRole("ta-1", "owner", TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -117,14 +117,14 @@ public sealed class SignalTeamRpcAdapterTests : IDisposable
             _audit, _store, Options.Create(new AdminOptions()), _time, NullLogger<SignalAdminRpcAdapter>.Instance);
         using var _ = SignalCallContext.Enter(new SignalPrincipal("admin", isAdmin: true, hasFullAccess: false, [], []));
 
-        var listed = Assert.Single((await admin.ListTeams()).Teams);
+        var listed = Assert.Single((await admin.ListTeams(TestContext.Current.CancellationToken)).Teams);
         Assert.Equal((1, 0), (listed.ActiveMembers, listed.ActiveTeamAdmins));
 
         // Break-glass: новий team-admin інвайт у команду + break-glass підвищення наявного member.
-        var invite = await admin.CreateInvite(teamId: team.Id, teamRole: TeamRoles.TeamAdmin);
+        var invite = await admin.CreateInvite(teamId: team.Id, teamRole: TeamRoles.TeamAdmin, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(team.Id, _store.GetInvite(InviteService.ComputeCodeHash(invite.Code))!.TeamId);
-        await admin.AdminSetTeamRole("m-1", TeamRoles.TeamAdmin);
-        Assert.Equal(1, (await admin.ListTeams()).Teams[0].ActiveTeamAdmins);
+        await admin.AdminSetTeamRole("m-1", TeamRoles.TeamAdmin, TestContext.Current.CancellationToken);
+        Assert.Equal(1, (await admin.ListTeams(TestContext.Current.CancellationToken)).Teams[0].ActiveTeamAdmins);
     }
 
     public void Dispose()

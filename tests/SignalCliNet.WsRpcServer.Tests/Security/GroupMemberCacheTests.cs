@@ -43,7 +43,7 @@ public sealed class GroupMemberCacheTests
         groups.Setup(g => g.ListGroupsAsync(Account, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ListGroupsResponse([GroupWith("aci-1", "aci-2")]));
 
-        Assert.Equal(GroupMembership.Member, await cache.CheckAsync(Account, GroupId, "aci-1"));
+        Assert.Equal(GroupMembership.Member, await cache.CheckAsync(Account, GroupId, "aci-1", TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -53,7 +53,7 @@ public sealed class GroupMemberCacheTests
         groups.Setup(g => g.ListGroupsAsync(Account, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ListGroupsResponse([GroupWith("aci-2")]));
 
-        Assert.Equal(GroupMembership.NotMember, await cache.CheckAsync(Account, GroupId, "aci-1"));
+        Assert.Equal(GroupMembership.NotMember, await cache.CheckAsync(Account, GroupId, "aci-1", TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -63,7 +63,7 @@ public sealed class GroupMemberCacheTests
         groups.Setup(g => g.ListGroupsAsync(Account, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ListGroupsResponse([])); // бот більше не в групі
 
-        Assert.Equal(GroupMembership.NotMember, await cache.CheckAsync(Account, GroupId, "aci-1"));
+        Assert.Equal(GroupMembership.NotMember, await cache.CheckAsync(Account, GroupId, "aci-1", TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -73,7 +73,7 @@ public sealed class GroupMemberCacheTests
         groups.Setup(g => g.ListGroupsAsync(Account, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("boom"));
 
-        Assert.Equal(GroupMembership.Unknown, await cache.CheckAsync(Account, GroupId, "aci-1"));
+        Assert.Equal(GroupMembership.Unknown, await cache.CheckAsync(Account, GroupId, "aci-1", TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -83,12 +83,12 @@ public sealed class GroupMemberCacheTests
         groups.Setup(g => g.ListGroupsAsync(Account, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ListGroupsResponse([GroupWith("aci-1")]));
 
-        await cache.CheckAsync(Account, GroupId, "aci-1");
-        await cache.CheckAsync(Account, GroupId, "aci-1"); // у межах TTL → з кешу
+        await cache.CheckAsync(Account, GroupId, "aci-1", TestContext.Current.CancellationToken);
+        await cache.CheckAsync(Account, GroupId, "aci-1", TestContext.Current.CancellationToken); // у межах TTL → з кешу
         groups.Verify(g => g.ListGroupsAsync(Account, It.IsAny<CancellationToken>()), Times.Once);
 
         time.Advance(TimeSpan.FromSeconds(61)); // TTL протух
-        await cache.CheckAsync(Account, GroupId, "aci-1");
+        await cache.CheckAsync(Account, GroupId, "aci-1", TestContext.Current.CancellationToken);
         groups.Verify(g => g.ListGroupsAsync(Account, It.IsAny<CancellationToken>()), Times.Exactly(2));
     }
 
@@ -99,9 +99,9 @@ public sealed class GroupMemberCacheTests
         groups.Setup(g => g.ListGroupsAsync(Account, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ListGroupsResponse([GroupWith("aci-1")]));
 
-        await cache.CheckAsync(Account, GroupId, "aci-1");
+        await cache.CheckAsync(Account, GroupId, "aci-1", TestContext.Current.CancellationToken);
         cache.Invalidate(GroupId);
-        await cache.CheckAsync(Account, GroupId, "aci-1");
+        await cache.CheckAsync(Account, GroupId, "aci-1", TestContext.Current.CancellationToken);
 
         groups.Verify(g => g.ListGroupsAsync(Account, It.IsAny<CancellationToken>()), Times.Exactly(2));
     }
