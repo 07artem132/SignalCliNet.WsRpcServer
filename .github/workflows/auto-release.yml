@@ -1,0 +1,114 @@
+name: Auto release
+
+# Кожен merge у main випускає реліз (модель PRC-Player/PRC-Linux): merge пройшов PR-CI й рев'ю,
+# тож окремий ручний крок (тег, dispatch) нічого не додає, а лише забувається.
+#
+#   plan    — без прав на запис: scripts/auto-release.sh --dry-run рахує, чи потрібен реліз.
+#             Docs/тести/CI-only merge → зелений no-op, привілейований job не стартує.
+#   release — версія + тег v* одним атомарним push-ем через GITHUB_TOKEN, потім dispatch
+#             release.yml на цей тег (тест-гейт, self-contained бінарники, бандли, GitHub Release).
+#
+# Тег, запушений через GITHUB_TOKEN, НЕ тригерить `push: tags`, тому release.yml стартуємо явно:
+# workflow_dispatch — документований виняток, він створює run і з GITHUB_TOKEN.
+# workflow_dispatch цього файлу — ручний fallback (наприклад, після збою інфраструктури).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Черга, а не скасування: два версіонери паралельно змагалися б за той самий «останній тег».
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: Обчислити версію
+    # 1) Лише з main: dispatch може вибрати будь-яку гілку, а скрипт пушить HEAD у main.
+    # 2) Захист від циклу: коміт `release: X.Y.Z` не повинен запускати версіонер ще раз
+    #    (з GITHUB_TOKEN run і так не створюється; умова лишається на випадок заміни токена на PAT).
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'release: '))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      release_owed: ${{ steps.plan.outputs.release_owed }}
+      next_tag: ${{ steps.plan.outputs.next_tag }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Обчислити версію (без побічних ефектів)
+        id: plan
+        run: bash scripts/auto-release.sh --dry-run
+
+      - name: Релізу не потрібно
+        if: steps.plan.outputs.release_owed != 'true'
+        run: echo "### Без релізу — змін у shipped-поверхні з останнього тегу v* нема." >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    name: Випустити ${{ needs.plan.outputs.next_tag }}
+    needs: plan
+    if: needs.plan.outputs.release_owed == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write   # коміт версії + тег
+      actions: write    # dispatch release.yml
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      # Черга серіалізує прогони, тож пізній run стартує зі старим github.sha. Тегувати не-вершину
+      # означає або відмову push-а, або тег, який перекриє наступний run — поступаємось йому.
+      - name: Відмовитись від застарілого HEAD
+        run: |
+          set -euo pipefail
+          remote="$(git ls-remote origin refs/heads/main | cut -f1)"
+          if [ "$remote" != "$(git rev-parse HEAD)" ]; then
+            echo "::notice title=Застарілий прогін::main уже на $remote — тег випустить його власний прогін."
+            echo "STALE=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Версія + тег (live)
+        id: cut
+        if: env.STALE != '1'
+        run: bash scripts/auto-release.sh
+
+      - name: Перевірити тег на origin
+        if: steps.cut.outputs.released_tag != ''
+        env:
+          TAG: ${{ steps.cut.outputs.released_tag }}
+        run: |
+          set -euo pipefail
+          [ "$(git cat-file -t "$TAG")" = tag ] || { echo "$TAG не annotated" >&2; exit 1; }
+          remote="$(git ls-remote --tags origin "refs/tags/$TAG*" | awk -v r="refs/tags/$TAG^{}" '$2 == r {print $1}')"
+          [ "$remote" = "$(git rev-parse HEAD)" ] || { echo "$TAG на origin вказує не на випущений коміт" >&2; exit 1; }
+          echo "### Випущено \`$TAG\`" >> "$GITHUB_STEP_SUMMARY"
+
+      # Падає червоним, якщо release.yml не стартував: тег уже є, тож повторний прогін цього workflow
+      # побачить «змін нема» — release.yml тоді запускається руками (команда в повідомленні).
+      - name: Запустити release.yml на тег
+        if: steps.cut.outputs.released_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.cut.outputs.released_tag }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG"; then
+              echo "release.yml запущено для $TAG"
+              exit 0
+            fi
+            sleep $((attempt * 10))
+          done
+          echo "::error title=Release не запущено::тег $TAG запушено, але dispatch не вдався. Запусти руками: gh workflow run release.yml --ref $TAG"
+          exit 1

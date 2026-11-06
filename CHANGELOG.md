@@ -7,6 +7,25 @@
 
 ## [Unreleased]
 
+## [2.4.0] — 2026-11-06
+
+### Added
+
+- **Автоматичні релізи на кожен merge у `main`** (модель PRC). `auto-release.yml` + `scripts/auto-release.sh`
+  ставлять тег `v*` і запускають `release.yml` на нього. Якщо PR сам підняв версію, тегується вона. Інакше
+  conventional-commit bump (`feat` → minor, `!` → major, решта → patch) комітом `release: X.Y.Z`, і заповнений
+  `[Unreleased]` стає секцією релізу. Merge, що змінює лише docs, тести чи CI, релізу не створює.
+
+### Changed
+
+- **Залежності на останніх stable-лініях.** `JSON-RPC.NET` 2.8.1 → **2.9.0**, `SignalCli.NET` 4.10.4 → **4.11.0**
+  (System.Reactive 7), `MessagePack` 2.5.307 → **3.1.12** (сервер і `AdminCli`), `SQLitePCLRaw.bundle_e_sqlite3`
+  2.1.14 → **3.0.5** (нативний SQLite на linux-x64/arm64 і win-x64 у publish на місці), тести на **xunit v3**
+  (`xunit.v3.mtp-off` 4.0.2 на VSTest-хості, `xunit.runner.visualstudio` 4.0.1). Поведінка й wire-протокол без змін;
+  580/580 тестів.
+- `release.yml` визначає версію й створює GitHub Release за типом ref (тег), а не за подією, тож працює і з
+  dispatch від авто-релізу.
+
 ## [2.3.4] — 2026-11-06
 
 ### Added

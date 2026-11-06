@@ -9,6 +9,9 @@ name: Release
 # все одно робить власний restore, але ранній прогін тут — fail-fast + прогрів
 # NuGet-кешу для конкретного RID тим самим шляхом (FAST-feed або локальний
 # fallback-feed), яким пройшов generic restore вище.
+# Тригери: workflow_dispatch на тег v* — основний шлях (auto-release.yml після кожного merge у main
+# ставить тег і запускає цей workflow; тег від GITHUB_TOKEN `push: tags` не тригерить). Ручний push
+# тегу — те саме. workflow_dispatch на гілку — лише workflow-артефакти з версією 0.0.0-manual.
 on:
   push:
     tags: ["v*"]
@@ -111,17 +114,17 @@ jobs:
           dotnet test tests/SignalCliNet.WsRpcServer.Tests/SignalCliNet.WsRpcServer.Tests.csproj
           -c Release --no-build
 
-      # --- Версія релізу: з тега (без ведучого 'v') або заглушка для ручного запуску ---
+      # --- Версія релізу: з тега (push або dispatch на тег, без ведучого 'v') або заглушка для запуску з гілки ---
       - name: Determine version
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "TAG=" >> "$GITHUB_ENV"
-            echo "VERSION=0.0.0-manual" >> "$GITHUB_ENV"
-          else
+          if [ "${{ github.ref_type }}" = "tag" ]; then
             TAG="${GITHUB_REF#refs/tags/}"
             echo "TAG=$TAG" >> "$GITHUB_ENV"
             echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+          else
+            echo "TAG=" >> "$GITHUB_ENV"
+            echo "VERSION=0.0.0-manual" >> "$GITHUB_ENV"
           fi
 
       # --- Publish self-contained бінарників (кожен виклик сам ресторить під свій RID) ---
@@ -166,9 +169,9 @@ jobs:
       - name: Checksums
         run: sha256sum SignalCliNet.WsRpcServer-*.tar.gz SignalCliNet.WsRpcServer-*.zip | tee SHA256SUMS
 
-      # --- Тег → справжній GitHub Release; ручний запуск → лише workflow-артефакти (без релізу) ---
+      # --- Тег → справжній GitHub Release; запуск з гілки → лише workflow-артефакти (без релізу) ---
       - name: Create GitHub Release
-        if: github.event_name == 'push'
+        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # Ідемпотентно: якщо реліз під цей тег уже створено вручну (GitHub UI → Draft a new release),
@@ -189,7 +192,7 @@ jobs:
           fi
 
       - name: Upload workflow artifacts (manual run)
-        if: github.event_name == 'workflow_dispatch'
+        if: github.ref_type != 'tag'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: SignalCliNet.WsRpcServer-${{ env.VERSION }}
