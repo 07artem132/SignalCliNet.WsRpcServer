@@ -440,13 +440,16 @@ public sealed class AuthorizingSignalJsonRpc : JsonRpc
                 AccountIsolationGuard.AssertAccountAllowed(_principal, account);
         }
 
-        // D11: валідація recipient'ів до dispatch. У gated group-send group-recipient'и відкидаємо з
-        // user-валідації (їх формат — base64 group-id, не user-id; авторизацію робить send-gate).
+        // D11: валідація recipient'ів до dispatch. Валідні base64 group-id не проганяємо як user-id:
+        // у gated group-send їх авторизує send-gate; у звичайному send акаунт уже звірено з principal
+        // (anti-IDOR вище), тож це відправка у власну групу акаунта — членство перевіряє signal-cli.
+        // Раніше group-id тут відкидався як «Malformed recipient» (-32602) поза shared-bot режимом.
         if (policy.RecipientsArgName is not null)
         {
             var recipients = ExtractStringList(request, policy.RecipientsArgName, policy.RecipientsArgIndex);
-            if (isGatedGroupSend)
-                recipients = recipients.Where(static r => !LooksLikeGroup(r) && !TeamAlias.TryParseRecipient(r, out _)).ToList();
+            recipients = isGatedGroupSend
+                ? recipients.Where(static r => !LooksLikeGroup(r) && !TeamAlias.TryParseRecipient(r, out _)).ToList()
+                : recipients.Where(static r => !LooksLikeGroup(r)).ToList();
             RecipientValidator.AssertValidUserRecipients(recipients);
         }
 
