@@ -114,7 +114,7 @@ docker compose exec wsrpcserver wsrpc-admin revoke <identityId>         # втр
 
 ```bash
 cd /opt/signal-notify
-sed -i 's/^WSRPC_VERSION=.*/WSRPC_VERSION=2.4.0/' .env   # або: install.sh … --version 2.4.0
+sed -i 's/^WSRPC_VERSION=.*/WSRPC_VERSION=2.4.1/' .env   # або: install.sh … --version 2.4.1
 docker compose up -d --build
 ```
 
