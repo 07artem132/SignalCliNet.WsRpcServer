@@ -29,8 +29,9 @@ internal sealed partial class AuthOptionsValidator : IValidateOptions<AuthOption
 internal sealed partial class AdmissionOptionsValidator : IValidateOptions<AdmissionOptions>;
 
 /// <summary>Compile-time validator for <see cref="GroupClaimOptions"/> (DataAnnotations [Range] bounds).</summary>
-// Межові правила (ClaimTtlMinutes 1..1440, BindingTtlHours 1..8760, MaxActiveBindingsPerIdentity 1..1000,
-// ClaimRequestsPerHourPerIdentity 1..1000, MemberCacheTtlSeconds 5..3600) — через [Range]. Крос-правил немає.
+// Межові правила (ClaimTtlMinutes 1..1440, BindingTtlHours 1..8760, BindingRenewWindowHours 1..8760,
+// MaxActiveBindingsPerIdentity 1..1000, ClaimRequestsPerHourPerIdentity 1..1000, MemberCacheTtlSeconds 5..3600) —
+// через [Range]. Крос-правил немає: вікно поновлення обмежується половиною TTL у рантаймі (GroupBindingRenewalService).
 [OptionsValidator]
 internal sealed partial class GroupClaimOptionsValidator : IValidateOptions<GroupClaimOptions>;
 

@@ -190,6 +190,21 @@ public interface IDurableStore
     void RevokeGroupBindingsForIdentity(string identityId);
 
     /// <summary>
+    /// Returns the active per-identity group-bindings whose expiry falls in (<paramref name="now"/>,
+    /// <paramref name="expiresBefore"/>] — only the newest row per <c>(identity, group)</c>, i.e. the row the
+    /// send-gate reads (add-binding-auto-renew).
+    /// </summary>
+    IReadOnlyList<GroupBindingRecord> GetGroupBindingsExpiringBefore(DateTimeOffset now, DateTimeOffset expiresBefore);
+
+    /// <summary>
+    /// Atomically moves the expiry of <paramref name="bindingId"/> forward to <paramref name="newExpiresAt"/> —
+    /// only while it is still active (not revoked, not expired at <paramref name="now"/>) and the new expiry is
+    /// later (conditional <c>UPDATE</c>; a concurrent revoke always wins).
+    /// </summary>
+    /// <returns><c>true</c> if this call extended the binding.</returns>
+    bool TryExtendGroupBinding(string bindingId, DateTimeOffset now, DateTimeOffset newExpiresAt);
+
+    /// <summary>
     /// Returns the send-dedup row for <paramref name="identityId"/>/<paramref name="messageId"/>, or
     /// <c>null</c> if none (idempotency lookup, task 3.3). Read BEFORE admission by the coordinator.
     /// </summary>
@@ -261,6 +276,21 @@ public interface IDurableStore
 
     /// <summary>Marks the <c>(team, alias)</c> binding revoked.</summary>
     void RevokeTeamBinding(string teamId, string alias);
+
+    /// <summary>
+    /// Returns every active team alias-binding whose expiry falls in (<paramref name="now"/>,
+    /// <paramref name="expiresBefore"/>] (add-binding-auto-renew).
+    /// </summary>
+    IReadOnlyList<TeamBindingRecord> GetTeamBindingsExpiringBefore(DateTimeOffset now, DateTimeOffset expiresBefore);
+
+    /// <summary>
+    /// Atomically moves the expiry of the <c>(team, alias)</c> binding forward to <paramref name="newExpiresAt"/> —
+    /// only while it still points at <paramref name="groupId"/>/<paramref name="anchorAci"/> (a concurrent re-bind is
+    /// not extended), is active at <paramref name="now"/> and the new expiry is later.
+    /// </summary>
+    /// <returns><c>true</c> if this call extended the binding.</returns>
+    bool TryExtendTeamBinding(
+        string teamId, string alias, string groupId, string anchorAci, DateTimeOffset now, DateTimeOffset newExpiresAt);
 
     /// <summary>
     /// Deletes send-dedup rows whose scope key starts with <paramref name="scopePrefix"/> and that are older

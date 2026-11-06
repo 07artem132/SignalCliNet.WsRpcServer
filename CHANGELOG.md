@@ -7,6 +7,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Автоподовження прив'язок груп** (`add-binding-auto-renew`). Прив'язка групи (per-identity і командний alias)
+  більше не спливає мовчки через 30 днів, поки anchor досі в групі: фоновий `GroupBindingRenewalService` щогодини
+  поновлює прив'язки, що спливають протягом `Server:GroupClaim:BindingRenewWindowHours` (дефолт 7 днів), до
+  `now + BindingTtlHours`. Anchor вийшов → прив'язку не поновлено (send-gate відкличе її, як і раніше). Запис
+  умовний: паралельний revoke чи перепривʼязка виграє. Вимкнути: `Server:GroupClaim:AutoRenewBindings=false`.
+  Wire-протокол і схема БД без змін.
+
 ## [2.4.1] — 2026-11-06
 
 ### Changed

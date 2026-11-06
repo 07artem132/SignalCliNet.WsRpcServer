@@ -1125,6 +1125,66 @@ public sealed class DurableStore : IDurableStore, IDisposable
     }
 
     /// <inheritdoc />
+    public IReadOnlyList<GroupBindingRecord> GetGroupBindingsExpiringBefore(DateTimeOffset now, DateTimeOffset expiresBefore)
+    {
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                var bindings = new List<GroupBindingRecord>();
+                using var command = _connection.CreateCommand();
+                // Лише найновіший рядок на (identity, group) — саме його читає send-gate (GetGroupBinding);
+                // старіші рядки після re-claim поновлювати немає сенсу.
+                command.CommandText =
+                    """
+                    SELECT b.binding_id, b.identity_id, b.group_id, b.anchor_aci, b.expires_at, b.revoked, b.created_at
+                    FROM group_bindings b
+                    WHERE b.revoked = 0 AND b.expires_at > $now AND b.expires_at <= $before
+                      AND NOT EXISTS (
+                        SELECT 1 FROM group_bindings n
+                        WHERE n.identity_id = b.identity_id AND n.group_id = b.group_id AND n.created_at > b.created_at)
+                    ORDER BY b.expires_at;
+                    """;
+                command.Parameters.AddWithValue("$now", FormatTimestamp(now));
+                command.Parameters.AddWithValue("$before", FormatTimestamp(expiresBefore));
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                {
+                    bindings.Add(new GroupBindingRecord(
+                        reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
+                        ParseTimestamp(reader.GetString(4)), reader.GetInt32(5) != 0, ParseTimestamp(reader.GetString(6))));
+                }
+
+                return (IReadOnlyList<GroupBindingRecord>)bindings;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public bool TryExtendGroupBinding(string bindingId, DateTimeOffset now, DateTimeOffset newExpiresAt)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(bindingId);
+
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                // Умовний UPDATE: revoke (anchor-churn, revoke identity) чи сплив між читанням і записом виграє.
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    UPDATE group_bindings SET expires_at = $new
+                    WHERE binding_id = $id AND revoked = 0 AND expires_at > $now AND expires_at < $new;
+                    """;
+                command.Parameters.AddWithValue("$id", bindingId);
+                command.Parameters.AddWithValue("$now", FormatTimestamp(now));
+                command.Parameters.AddWithValue("$new", FormatTimestamp(newExpiresAt));
+                return command.ExecuteNonQuery() == 1;
+            });
+        }
+    }
+
+    /// <inheritdoc />
     public void RevokeGroupBindingsForIdentity(string identityId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(identityId);
@@ -1570,6 +1630,66 @@ public sealed class DurableStore : IDurableStore, IDisposable
                 command.Parameters.AddWithValue("$alias", alias);
                 command.ExecuteNonQuery();
                 return 0;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public IReadOnlyList<TeamBindingRecord> GetTeamBindingsExpiringBefore(DateTimeOffset now, DateTimeOffset expiresBefore)
+    {
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                var bindings = new List<TeamBindingRecord>();
+                using var command = _connection.CreateCommand();
+                // Timestamp-и — UTC ISO-8601 "O" фіксованої ширини, тож рядкове порівняння = хронологічне.
+                command.CommandText =
+                    """
+                    SELECT team_id, alias, group_id, anchor_aci, bound_by, expires_at, revoked, created_at
+                    FROM team_bindings
+                    WHERE revoked = 0 AND expires_at > $now AND expires_at <= $before
+                    ORDER BY expires_at;
+                    """;
+                command.Parameters.AddWithValue("$now", FormatTimestamp(now));
+                command.Parameters.AddWithValue("$before", FormatTimestamp(expiresBefore));
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                    bindings.Add(ReadTeamBinding(reader.GetString(0), reader.GetString(1), reader, 2));
+                return (IReadOnlyList<TeamBindingRecord>)bindings;
+            });
+        }
+    }
+
+    /// <inheritdoc />
+    public bool TryExtendTeamBinding(
+        string teamId, string alias, string groupId, string anchorAci, DateTimeOffset now, DateTimeOffset newExpiresAt)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(teamId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(alias);
+        ArgumentException.ThrowIfNullOrWhiteSpace(groupId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(anchorAci);
+
+        lock (_sync)
+        {
+            return WithRetry(() =>
+            {
+                // Умовний UPDATE: перепривʼязка (інша група/anchor), revoke чи сплив між читанням і записом — не
+                // поновлюємо. Так поновлення ніколи не воскрешає відкликану прив'язку.
+                using var command = _connection.CreateCommand();
+                command.CommandText =
+                    """
+                    UPDATE team_bindings SET expires_at = $new
+                    WHERE team_id = $team AND alias = $alias AND group_id = $group AND anchor_aci = $anchor
+                      AND revoked = 0 AND expires_at > $now AND expires_at < $new;
+                    """;
+                command.Parameters.AddWithValue("$team", teamId);
+                command.Parameters.AddWithValue("$alias", alias);
+                command.Parameters.AddWithValue("$group", groupId);
+                command.Parameters.AddWithValue("$anchor", anchorAci);
+                command.Parameters.AddWithValue("$now", FormatTimestamp(now));
+                command.Parameters.AddWithValue("$new", FormatTimestamp(newExpiresAt));
+                return command.ExecuteNonQuery() == 1;
             });
         }
     }
